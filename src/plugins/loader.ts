@@ -54,8 +54,11 @@ export async function importPluginModule(dirOrName: string): Promise<any> {
   } catch {
     hasPkg = false;
   }
+  // @vite-ignore: loading a plugin by name IS the job here, so the specifier cannot be
+  // static. Vite is right to warn and there is nothing to fix while this folder exists;
+  // the warning printed on every Studio start (see ./README.md, this folder is legacy).
   const target = hasPkg ? pathToFileURL(resolveEntry(dirOrName)).href : dirOrName;
-  return import(target);
+  return import(/* @vite-ignore */ target);
 }
 
 /**

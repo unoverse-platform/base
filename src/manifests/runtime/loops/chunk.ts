@@ -13,12 +13,12 @@
  * of a batched write and it must be visible: one rejected batch out of ten is not a failed
  * call, and it is not a successful one either.
  */
-import type { ComposedNode } from "../compose.js";
-import type { RunContext } from "./context.js";
-import { evaluate } from "./templating.js";
-import { sendRequest } from "./request.js";
+import type { ComposedNode } from "../../compose.js";
+import type { RunContext } from "../context.js";
+import { evaluate } from "../templating.js";
+import { sendRequest } from "../http/request.js";
 import { fetchPolled } from "./poll.js";
-import { readSettled } from "./response.js";
+import { readSettled } from "../http/response.js";
 
 export interface Chunked {
   /** Items actually accepted, across every batch that succeeded. */

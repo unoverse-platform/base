@@ -1,7 +1,7 @@
 {
   "name": "@unoverse-platform/base",
-  "version": "0.1.1",
-  "description": "The node runtime: manifests, the platform surface a node sees, and plugin loading",
+  "version": "0.2.0",
+  "description": "The Unoverse YAML runtime: node manifests, rx definitions, and the platform surface a node sees",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,6 +15,7 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./package.json": "./package.json",
     "./*.js": {
       "types": "./src/*.ts",
       "default": "./src/*.ts"
@@ -30,8 +31,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
-    "prepublishOnly": "npm run build"
+    "build": "tsc && node scripts/copy-lint.mjs",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "prepublishOnly": "npm run test && npm run build"
   },
   "dependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",
@@ -43,6 +45,8 @@
     "fast-xml-parser": "^5.2.5",
     "handlebars": "^4.7.8",
     "ioredis": "^5.3.0",
+    "lucide": "^1.21.0",
+    "ws": "^8.18.0",
     "yaml": "^2.8.1"
   },
   "publishConfig": {
@@ -53,6 +57,7 @@
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
       },
+      "./package.json": "./package.json",
       "./*.js": {
         "types": "./dist/*.d.ts",
         "default": "./dist/*.js"
@@ -66,5 +71,8 @@
   "homepage": "https://github.com/unoverse-platform/base#readme",
   "bugs": {
     "url": "https://github.com/unoverse-platform/base/issues"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
   }
 }

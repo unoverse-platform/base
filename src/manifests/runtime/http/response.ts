@@ -1,5 +1,5 @@
-import { evaluate } from "./templating.js";
-import { decodeDynamoJson } from "./aws.js";
+import { evaluate } from "../templating.js";
+import { decodeDynamoJson } from "../auth/aws.js";
 
 /**
  * Reading a response off the wire. Bytes to payloads, and nothing else.

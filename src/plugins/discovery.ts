@@ -69,7 +69,7 @@ export async function getPluginMetadata(pluginName: string): Promise<PluginMetad
     } else if (fs.existsSync(npmPkgJsonPath)) {
       pkg = JSON.parse(fs.readFileSync(npmPkgJsonPath, "utf-8"));
     } else {
-      pkg = await import(`${pluginName}/package.json`);
+      pkg = await import(/* @vite-ignore */ `${pluginName}/package.json`);
     }
 
     const gravity = pkg.gravity || {};

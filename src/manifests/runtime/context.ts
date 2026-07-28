@@ -49,7 +49,52 @@ export interface RunContext {
    * the authenticated identity are different values, and the memory server keys its
    * snapshot by the former. Using the wrong one writes to a key nobody reads, silently.
    */
-  scope: { userId?: string; workflowId?: string };
+  /**
+   * `conversationId` and `chatId` are the AUDIO LANE's keys, not decoration. A duplex voice node
+   * registers its microphone handler and sends the model's audio against the conversation, so
+   * without them the lane silently matches nothing: every frame in is dropped by an id comparison
+   * that cannot succeed, and every frame out goes to a conversation nobody is listening on. That
+   * failed with no error at all, which is why they are first-class here rather than read ad hoc.
+   */
+  /**
+   * `nodeId` is WHICH INSTANCE on the canvas, and it is here because two different things are
+   * keyed by it and neither can be derived from anything else in scope.
+   *
+   * A content-addressed id mixes it in, so two Code nodes computing the same value in the same
+   * workflow still mint different universal ids — which is the point, since they are different
+   * places in the graph. And the saved-context hash stores one field per node, so a later
+   * template reaches `saved.<nodeId>`. Without it both fall back to a constant and collide
+   * silently: the ids look stable while describing the wrong node.
+   */
+  /**
+   * `platformUrl` is THE PLATFORM'S OWN API, for the nodes that call US rather than a vendor.
+   *
+   * Most nodes reach a third party at a host they can name in `allowedHosts`. A growing few reach the
+   * engine instead — spatial ingestion hands raw text to the content pipeline, spatial search queries
+   * the dictionary — and that host is a DEPLOYMENT fact: localhost in dev, a service name in a cluster,
+   * a domain in production. A manifest cannot derive it and must never guess it.
+   *
+   * DERIVED from `UNOVERSE_RUNTIME_PORT`, which docker-compose already sets and the server already
+   * reads — a node runs INSIDE the service, so it is calling itself and needs no configuration to learn
+   * its own address. Loopback, because :4106 is the ungated internal listener and is published to
+   * 127.0.0.1 only.
+   */
+  scope: { userId?: string; workflowId?: string; conversationId?: string; chatId?: string; executionId?: string; nodeId?: string; platformUrl?: string };
+  /**
+   * THE CONVERSATION SO FAR, for a tool loop against a vendor with no chain id.
+   *
+   * Empty except inside `runToolLoop`, and empty there on the first turn. It grows by the assistant's
+   * tool-call turn and one message per result, and a manifest spreads it into its own message array:
+   *
+   *     messages: [{ role: 'system', … }, { role: 'user', … }, ...transcript]
+   *
+   * It exists because Chat Completions — GLM, Grok, most OpenAI-COMPATIBLE vendors — resends the whole
+   * history every turn, where the Responses API hands back a `previous_response_id` and the next turn
+   * just names it. `continuity` models the latter; this models the former. The SHAPE of a message stays
+   * in the manifest, because it is the vendor's, not ours.
+   */
+  transcript: unknown[];
+
   /**
    * What an OAuth2 exchange returned, for the call it authenticated.
    *
@@ -61,7 +106,7 @@ export interface RunContext {
 }
 
 export function emptyContext(partial: Partial<RunContext> = {}): RunContext {
-  return { config: {}, credentials: {}, signal: {}, prompt: {}, services: {}, params: {}, calls: {}, user: {}, scope: {}, token: {}, ...partial };
+  return { config: {}, credentials: {}, signal: {}, prompt: {}, services: {}, params: {}, calls: {}, user: {}, scope: {}, token: {}, transcript: [], ...partial };
 }
 
 /** Config values a resolver rewrites just before the request is built. */

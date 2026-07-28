@@ -6,6 +6,7 @@
 import { clientTransport } from "./clientTransport.js";
 import { callServiceViaWorkflow, saveTokenUsageToWorkflow, saveMCPTraceToWorkflow } from "./serviceCalls.js";
 import { getRedisClient } from "./redis.js";
+import { getDistributedAudioManager } from "./audioManager.js";
 
 /**
  * Build execution context for a node
@@ -63,6 +64,19 @@ export function buildExecutionContext(nodeType: string, inputs: any, config: any
     saveTokenUsage: saveTokenUsageToWorkflow,
     saveMCPTrace: saveMCPTraceToWorkflow,
     getRedisClient,
+    /**
+     * THE AUDIO LANE, and its absence here was a total, silent failure of every voice node.
+     *
+     * A live voice node registers its microphone handler and sends the model's speech through this
+     * handle. It was missing from THIS api — the one the runtime builds per execution — while
+     * `pluginAPI.ts` exposed it on the api a PLUGIN receives at setup. A code node reached the lane
+     * through plugin-base's platform singleton and never noticed; a manifest node has only what is
+     * on `executionContext.api`, so it got `undefined`, took the no-lane path, and ran a perfectly
+     * healthy conversation that nobody could hear or speak to. No error, in either direction.
+     *
+     * Same accessor `pluginAPI.ts` uses, so both paths reach one manager rather than two.
+     */
+    getAudioWebSocketManager: () => getDistributedAudioManager(),
     callService: async (method: string, params: any) => {
       return callServiceViaWorkflow(method, params, executionContext);
     },

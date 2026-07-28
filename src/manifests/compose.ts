@@ -36,6 +36,16 @@ export interface ComposedNode {
    * This is its boundary.
    */
   allowedHosts: string[];
+  /**
+   * WHO MAY RUN THIS NODE, from node.yaml (DECLARATIVE_NODES.md §9.13). The inbound
+   * question, about the CALLER. Not a call's `credential`, which is outbound.
+   *
+   * Carried here because it was previously read out of the YAML by lint and then dropped:
+   * the executor received a node object with no `auth` field at all, so the check could not
+   * have been written even if someone had tried. A declaration nothing can read is worse
+   * than no declaration, because it looks decided.
+   */
+  auth: { required: boolean; role?: string };
   origin: string;
   /** The registry-shaped definition. */
   definition: Record<string, any>;
@@ -125,6 +135,33 @@ function packagePublisher(pkg: RawPackage): string | null {
   if (!pkg.packageFile) return null;
   const doc: any = parse(pkg.packageFile, `${pkg.name}/package.yaml`) ?? {};
   return typeof doc.publisher === "string" && doc.publisher.trim() ? doc.publisher.trim() : null;
+}
+
+/**
+ * WHO MAY RUN THIS NODE, read off node.yaml (DECLARATIVE_NODES.md §9.13).
+ *
+ * FAILS CLOSED on a malformed or missing block. Lint requires `auth.required` and rejects a
+ * `role` alongside `required: false`, but lint runs at author time and a manifest can arrive
+ * as a database row that never met it. Defaulting the absent case to "open" would mean the
+ * one path that skipped lint is also the one that skips authorization.
+ *
+ * The unsatisfiable pair is collapsed rather than thrown on: a role implies an authenticated
+ * caller, so `role` with `required: false` is read as `required: true`. Throwing at LOAD
+ * would take the whole package down for one bad node, and admitting everyone would be the
+ * opposite of what the author asked for.
+ */
+export function nodeAuth(node: any): { required: boolean; role?: string } {
+  const raw = node?.auth;
+  const role = typeof raw?.role === "string" && raw.role.trim() ? raw.role.trim() : undefined;
+  // `typeof null === "object"`, so null must be excluded explicitly or reading `.required`
+  // off it throws — turning a fail-closed path into a crash, which is a different failure
+  // with a much worse error message.
+  if (raw === null || typeof raw !== "object")
+    // No block at all. Lint makes this impossible in the tree; a pasted manifest is why it
+    // is handled here, and "signed in" is the safe reading of a node that never said.
+    return { required: true, role };
+  if (typeof raw.required !== "boolean") return { required: true, role };
+  return { required: raw.required || role !== undefined, role };
 }
 
 /** A package's declared allowedHosts hosts. Absent or empty means the package cannot call out. */
@@ -275,13 +312,34 @@ export function composeNode(raw: RawNode, pkg: RawPackage): ComposedNode {
   // The LAST step is the one whose reply becomes the node's answer, so it is the only one
   // whose transport can make the node stream. Every earlier step settles by definition.
   const finalCall = api?.run?.[api.run.length - 1];
-  const streams = ["sse", "ndjson", "awsEventStream"].includes(finalCall?.transport);
-  const hasContinue = (iface.inputs ?? []).some((i: any) => ["CONTINUE", "SPAWN"].includes(i?.signal));
-  const derived = streams || hasContinue || api?.toolExchange ? "CallbackNode" : "PromiseNode";
+  // `ws` streams by definition: a duplex session emits for as long as the call lasts. Listed
+  // beside sse for the same reason — the node cannot settle once, so it is a CallbackNode.
+  const streams = ["sse", "ndjson", "awsEventStream", "ws"].includes(finalCall?.transport);
+  /**
+   * SPAWN implies an actor. CONTINUE DOES NOT, and this rule used to say it did.
+   *
+   * The premise was that a re-fired node must be a generator. It is false, and the LoopStart /
+   * LoopEnd pair is the counter-example that found it: LoopStart is a settle-once node that runs,
+   * returns, and then runs AGAIN because LoopEnd routes a `continue` signal back to it along an
+   * ordinary edge. Each pass is a separate execution, which is exactly why the loop's index has to
+   * live in Redis rather than in a closure.
+   *
+   * Getting this wrong is not cosmetic. `ManifestCallbackExecutor` has `initializeState`, and the
+   * registry reads the presence of that method to record executionMode "generator" — so forcing
+   * CallbackNode here would hand LoopStart an actor and have the engine drive it a different way
+   * than the node it replaces. The retired executor is a `PromiseNode` with a CONTINUE input, and
+   * that combination has to stay expressible.
+   *
+   * SPAWN stays, because SPAWN is by definition "initialise an actor" (09-signal-routing.md). What
+   * makes a node a CallbackNode is emitting more than once from ONE execution: a streaming
+   * transport, or a tool exchange's turns.
+   */
+  const spawns = (iface.inputs ?? []).some((i: any) => i?.signal === "SPAWN");
+  const derived = streams || spawns || api?.toolExchange ? "CallbackNode" : "PromiseNode";
   if (node.kind !== derived)
     throw new ManifestError(
       `${where}: declares kind "${node.kind}" but is a ${derived} (` +
-        (streams ? `its last step's transport "${finalCall.transport}" streams` : api?.toolExchange ? "it declares a toolExchange" : "an input carries a CONTINUE/SPAWN signal") +
+        (streams ? `its last step's transport "${finalCall.transport}" streams` : api?.toolExchange ? "it declares a toolExchange" : "an input carries a SPAWN signal") +
         `)`,
     );
 
@@ -291,6 +349,7 @@ export function composeNode(raw: RawNode, pkg: RawPackage): ComposedNode {
     packageName: pkg.name,
     origin: raw.origin,
     allowedHosts: nodeAllowedHosts(node, packageAllowedHosts(pkg), where),
+    auth: nodeAuth(node),
     api,
     // Shaped for the registry (see platform/pluginAPI.ts registerNode), so a manifest
     // node is indistinguishable from a code node everywhere downstream.

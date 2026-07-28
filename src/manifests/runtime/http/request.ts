@@ -4,17 +4,18 @@
  * Part of the manifest runtime (DECLARATIVE_NODES.md §2): the manifest DESCRIBES the
  * service, this half COMPUTES it. Split by concern so each piece stays readable.
  */
-import type { ComposedNode } from "../compose.js";
-import type { RunContext } from "./context.js";
-import { render, evaluate, primeTemplating } from "./templating.js";
+import type { ComposedNode } from "../../compose.js";
+import type { RunContext } from "../context.js";
+import { render, evaluate, primeTemplating } from "../templating.js";
 import { assertAllowedHost } from "./allowedHosts.js";
 import { readSettled, assertOk } from "./response.js";
-import { performState, type StateStore } from "./state.js";
-import { mintClientCredentials, invalidateToken } from "./oauth.js";
-import { signAwsRequest, presignAwsUrl, encodeDynamoJson, decodeDynamoJson, type AwsSigning } from "./aws.js";
-import { fetchPaginated } from "./paginate.js";
-import { fetchPolled } from "./poll.js";
-import { sendChunked } from "./chunk.js";
+import { performState, type StateStore } from "../state.js";
+import { mintClientCredentials, invalidateToken } from "../auth/oauth.js";
+import { signAwsRequest, presignAwsUrl, encodeDynamoJson, decodeDynamoJson, type AwsSigning } from "../auth/aws.js";
+import { fetchPaginated } from "../loops/paginate.js";
+import { fetchPolled } from "../loops/poll.js";
+import { performLoop } from "../loops/loop.js";
+import { sendChunked } from "../loops/chunk.js";
 
 /**
  * Build the HTTP request from a call. Auth schemes are executor capabilities.
@@ -78,7 +79,10 @@ export async function buildRequest(
       );
     return out;
   };
-  const auth = req.auth ?? { scheme: "none" };
+  // `credential` — the OUTBOUND one, how this node proves itself to the vendor. Renamed from
+  // `auth` on 2026-07-28: node.yaml's inbound `auth` (who may RUN this node) had the same
+  // name one file away, and the two were routinely mistaken for each other.
+  const auth = req.credential ?? { scheme: "none" };
   switch (auth.scheme) {
     case "none":
       break;
@@ -146,6 +150,24 @@ export async function buildRequest(
   for (const [k, v] of authQuery) query.set(k, v);
 
   let url = String(await resolveValue(req.url, scoped));
+
+  /**
+   * AN UNSET `scope.platformUrl` NAMES ITSELF.
+   *
+   * A node that calls the platform builds its url from `scope.platformUrl`, which is supplied from
+   * UNOVERSE_SERVICE_URL with no fallback (executor.ts). Unset, the expression yields undefined and
+   * string concatenation produces "undefined/content/ingest" — a URL that fails at DNS, reporting a
+   * host nobody configured rather than a variable nobody set.
+   *
+   * Same trap as a missing job id in poll.ts, and the same fix: the string form of nothing looks like
+   * a value, so it is caught by name here rather than left to the network.
+   */
+  if (/^undefined\b|^null\b/.test(url.trim()))
+    throw new Error(
+      `the request url resolved to "${url}". If it is built from scope.platformUrl, set ` +
+        `UNOVERSE_SERVICE_URL — it has no default, because a hardcoded localhost fallback fails silently ` +
+        `in production.`,
+    );
   if ([...query.keys()].length) url += (url.includes("?") ? "&" : "?") + query.toString();
 
   const method = req.method ?? "GET";
@@ -193,6 +215,89 @@ async function resolveValue(value: any, ctx: RunContext): Promise<unknown> {
   return value;
 }
 
+/**
+ * `fetch`, bounded by the call's `timeoutMs`.
+ *
+ * THIS WAS DECLARED AND NOT IMPLEMENTED. `timeoutMs` has been in api.schema.json and in seven
+ * manifests since the first of them was written, and the runtime never read it — so every call had
+ * no client-side limit at all. It surfaced as an OpenAI node sitting for 154 SECONDS against a
+ * declared `timeoutMs: 120000` before the vendor's edge gave up and returned a Cloudflare 520. The
+ * node looked hung, the number in the manifest was fiction, and nothing anywhere said so.
+ *
+ * TIME TO RESPONSE, not time to completion, which is why this clears the timer the moment `fetch`
+ * resolves rather than passing a bare `AbortSignal.timeout`. An abort signal stays live while the
+ * body is read, so the simple version would cut a long SSE stream off at the timeout — killing a
+ * working voice or agent turn on a limit that was only ever meant to catch a host that never
+ * answers. Headers arriving is the signal that the host is alive; after that the transport decides
+ * how long the body may take.
+ *
+ * A timeout is an ERROR, not an empty result: it fails with a message naming the limit and the call,
+ * so the manifest's own number appears in the log that reports it.
+ */
+async function fetchWithTimeout(url: string, init: any, timeoutMs: unknown, label: string): Promise<Response> {
+  const ms = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : 0;
+  if (!ms) return fetch(url, init);
+
+  // Composed rather than replaced: a caller's own signal (a cancelled run) must still abort.
+  const controller = new AbortController();
+  const outer: AbortSignal | undefined = init.signal;
+  const onAbort = () => controller.abort();
+  outer?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), ms);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (controller.signal.aborted && !outer?.aborted)
+      throw new Error(`${label}: no response after ${ms}ms (timeoutMs)`);
+    throw err;
+  } finally {
+    // Cleared as soon as the headers are in, so the body may stream for as long as it needs.
+    clearTimeout(timer);
+    outer?.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
+ * A MULTIPART BODY, from the same plain object every other encoding starts from.
+ *
+ * Needed because some endpoints only accept a file upload: ElevenLabs speech-to-text takes the audio
+ * as a form part, and no amount of JSON expresses that. Without it a node that uploads anything cannot
+ * be a manifest at all.
+ *
+ * TWO KINDS OF FIELD, and the manifest says which by SHAPE rather than by a flag:
+ *
+ *   a scalar                  a text field. Numbers and booleans are stringified, because a form
+ *                             carries text and the alternative is `[object Object]` reaching a vendor
+ *   { base64, mimeType?,      a FILE part. base64 is how bytes travel between calls — `transport:
+ *     filename? }             binary` produced it, and an event bus cannot carry a Buffer — so this is
+ *                             where it turns back into bytes, at the last moment before sending
+ *
+ * A file part needs a FILENAME even when the content is what matters: many servers ignore a part with
+ * none, and the failure is a 400 about a missing field rather than about the name. `file` is the
+ * fallback, which is what the retired ElevenLabs client used.
+ */
+function toFormData(body: unknown): FormData {
+  const form = new FormData();
+  if (!body || typeof body !== "object") return form;
+
+  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+    if (value === undefined || value === null) continue;
+
+    const part = value as Record<string, unknown>;
+    if (typeof value === "object" && typeof part.base64 === "string") {
+      const bytes = Buffer.from(part.base64, "base64");
+      form.set(key, new Blob([bytes], { type: String(part.mimeType ?? "application/octet-stream") }), String(part.filename ?? "file"));
+      continue;
+    }
+
+    // An object that is NOT a file part is JSON in a text field, which is how vendors take nested
+    // options on a form. Stringifying it as [object Object] would be silently wrong.
+    form.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+  }
+  return form;
+}
+
 export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: RunContext, label: string, forceReauth = false): Promise<Response> {
   await primeTemplating();
   const built: any = await buildRequest({ request: requestSpec }, ctx, forceReauth);
@@ -214,6 +319,15 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
       // about what is in the body. Only set when the manifest did not say.
       const headers = init.headers as Record<string, string>;
       if (headers["Content-Type"] === "application/json") delete headers["Content-Type"];
+    } else if (requestSpec?.encoding === "multipart") {
+      init.body = toFormData(resolved);
+      /**
+       * THE BOUNDARY IS NOT OURS TO WRITE. `fetch` generates it and sets Content-Type itself, so a
+       * declared `multipart/form-data` header would arrive WITHOUT the boundary parameter and the
+       * vendor would reject a body it could not split. Deleting the header is the fix, and it is the
+       * same reasoning as `binary` above: the default JSON header is a lie about what is being sent.
+       */
+      delete (init.headers as Record<string, string>)["Content-Type"];
     } else {
       // BEFORE signing, because the signature covers the bytes actually sent. Encoding after
       // would sign one body and send another, which AWS rejects with a signature mismatch.
@@ -222,10 +336,10 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
   }
   // AFTER templating, because the host may itself be templated (a per-tenant
   // subdomain), so only the resolved URL can be judged.
-  // The LAST argument is what makes the `"*"` host rule safe: a call with no `auth` block
-  // sends no credential, so there is nothing for a wildcard host to leak. One with auth is
-  // held to the declared list no matter what the package also allows.
-  assertAllowedHost(url, node.allowedHosts, node.type, !!requestSpec?.auth && requestSpec.auth.scheme !== "none");
+  // The LAST argument is what makes the `"*"` host rule safe: a call with no `credential`
+  // block sends nothing secret, so there is nothing for a wildcard host to leak. One that
+  // does is held to the declared list no matter what the package also allows.
+  assertAllowedHost(url, node.allowedHosts, node.type, !!requestSpec?.credential && requestSpec.credential.scheme !== "none");
 
   // LAST, once the url, headers and body are final. A SigV4 signature covers all three, so
   // it is the one auth scheme that cannot be resolved up front with the others. Signing
@@ -237,16 +351,17 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
   const attempts = Math.max(1, retry?.attempts ?? 1);
   const retryOn: number[] = retry?.on ?? [];
 
+
   let res!: Response;
   for (let attempt = 1; ; attempt++) {
-    res = await fetch(url, init);
+    res = await fetchWithTimeout(url, init, requestSpec?.timeoutMs, label);
     if (res.ok) return res;
 
     // A minted token can be revoked or expire early, and the vendor says so with a 401.
     // Refresh ONCE and retry, exactly as the retired client did. Guarded by !forceReauth so
     // a genuinely rejected credential fails rather than looping.
-    if (res.status === 401 && requestSpec?.auth?.scheme === "oauth2ClientCredentials" && !forceReauth) {
-      invalidateToken(String(render(requestSpec.auth.tokenUrl, ctx)), String(render(requestSpec.auth.clientId, ctx)));
+    if (res.status === 401 && requestSpec?.credential?.scheme === "oauth2ClientCredentials" && !forceReauth) {
+      invalidateToken(String(render(requestSpec.credential.tokenUrl, ctx)), String(render(requestSpec.credential.clientId, ctx)));
       console.warn(`[manifests] ${label}: 401, refreshing the access token and retrying once`);
       return sendRequest(node, requestSpec, ctx, label, true);
     }
@@ -311,7 +426,29 @@ export async function runCalls(
     // order in the reader's head instead of on the page.
     if (call.state) {
       const value = call.value ? ((await evaluate(call.value, scoped as unknown as Record<string, unknown>)) as any) : undefined;
-      const payload = await performState(call.state, String(render(call.key, scoped)), value, call.max, store);
+      // `key` is optional now that `save` exists: its key is the run's, so a manifest naming one
+      // would be guessing at the engine's layout. `render(undefined)` gives back undefined, and
+      // String() of that is the text "undefined" — harmless only because `save` ignores the key
+      // entirely, which is why performState takes the scope separately rather than a built key.
+      const payload = await performState(
+        call.state,
+        String(render(call.key, scoped)),
+        value,
+        call.max,
+        store,
+        ctx.scope,
+      );
+      results[call.name] = payload;
+      last = payload;
+      continue;
+    }
+
+    // ITERATION BOOKKEEPING, and it belongs in this list for the same reason `state` does: a
+    // LoopStart both READS the advanced index and OPENS a new loop, one or the other depending on
+    // whether it was re-fired, and those are two entries whose `when` tells them apart.
+    if (call.loop) {
+      const value = call.value ? await evaluate(call.value, scoped as unknown as Record<string, unknown>) : undefined;
+      const payload = await performLoop(call.loop, ctx.scope?.executionId, String(render(call.key, scoped)), value, store?.loop);
       results[call.name] = payload;
       last = payload;
       continue;

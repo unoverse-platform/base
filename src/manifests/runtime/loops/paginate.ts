@@ -13,11 +13,11 @@
  * A paginated call's reply is `{ items, pages, truncated }`, not the last page's body. The
  * accumulation is the answer, and handing back the final page would quietly lose the rest.
  */
-import type { ComposedNode } from "../compose.js";
-import type { RunContext } from "./context.js";
-import { evaluate } from "./templating.js";
-import { sendRequest } from "./request.js";
-import { readSettled, assertOk } from "./response.js";
+import type { ComposedNode } from "../../compose.js";
+import type { RunContext } from "../context.js";
+import { evaluate } from "../templating.js";
+import { sendRequest } from "../http/request.js";
+import { readSettled, assertOk } from "../http/response.js";
 
 /**
  * Put the page token where the manifest said. Explicit on BOTH values rather than treating

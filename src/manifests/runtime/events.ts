@@ -26,7 +26,7 @@
  */
 import type { ComposedNode } from "../compose.js";
 import { evaluate } from "./templating.js";
-import type { Emission } from "./response.js";
+import type { Emission } from "./http/response.js";
 
 export type EventSource = "response" | "narrator" | "tool" | "complete";
 

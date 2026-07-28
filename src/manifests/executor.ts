@@ -23,11 +23,12 @@
  */
 import type { ComposedNode } from "./compose.js";
 import { performApi, performService, applyResolvers, emptyContext, makeStateStore, type RunContext, type ToolBridge } from "./runtime/index.js";
+import { assertAuthorized } from "./runtime/authorize.js";
 
 /**
  * Build the tool bridge from the platform's own harness.
  *
- * Every MCP judgement lives in plugin-base/agent-mcp and is reached from here: what a
+ * Every MCP judgement lives in ../agent-mcp and is reached from here: what a
  * tool is, what a discovery result unlocks, when a turn ends, how much of a result the
  * model needs. The loop only owns the wire format. That split is what stops each agent
  * family re-making these decisions and drifting apart, which is how GLM and Grok ended
@@ -87,11 +88,58 @@ function contextFor(node: ComposedNode, inputs: any, config: any, executionConte
     user: { email: user.email, id: user.id ?? user.sub, name: user.name },
     // The PLATFORM's ids, which is what state keys are built from. Same precedence the
     // retired CRM code used, and it is not interchangeable with user.id above.
+    //
+    // `conversationId` and `chatId` are here because the AUDIO LANE is keyed by conversation.
+    // Their absence was a silent, total failure of the voice node: `runDuplexSession` fell back
+    // to the node TYPE as its key, so `setAudioDataHandler` compared the client's real session id
+    // against the string "OpenAIRealtimeVoice", dropped every microphone frame, and sent the
+    // model's audio to a conversation nobody was listening on. No error anywhere — just silence.
+    //
+    // Same precedence the retired node used: publishingContext first, then workflow variables.
     scope: {
       userId: executionContext?.publishingContext?.userId ?? executionContext?.workflow?.variables?.userId,
       workflowId: executionContext?.workflowId ?? executionContext?.workflow?.id,
+      conversationId:
+        executionContext?.publishingContext?.conversationId ?? executionContext?.workflow?.variables?.conversationId,
+      chatId: executionContext?.publishingContext?.chatId ?? executionContext?.workflow?.variables?.chatId,
+      executionId: executionContext?.executionId,
+      // Which INSTANCE on the canvas. The retired Code node fell back to the literal "code" when
+      // this was missing, which meant two Code nodes minted the same universal id and the saved
+      // context stored them under one key. Passing it through rather than defaulting is what makes
+      // that failure impossible instead of merely unlikely.
+      nodeId: executionContext?.nodeId,
+      /**
+       * THE PLATFORM'S OWN API, for a node that calls us rather than a vendor.
+       *
+       * DERIVED, not configured. A node runs INSIDE the unoverse service, so it is calling itself —
+       * asking a developer to supply the platform's own address would be configuration for something
+       * the process already knows. `UNOVERSE_RUNTIME_PORT` is the internal listener and is already set
+       * in docker-compose; the server reads it the same way (`RUNTIME_PORT`), and already builds its own
+       * loopback url as `http://127.0.0.1:${port}` elsewhere.
+       *
+       * LOOPBACK, not a service name: :4106 is the UNGATED internal listener, published to 127.0.0.1
+       * only and never widened. Reaching it from anywhere else would be a mistake, so the address says
+       * so.
+       *
+       * The retired SpatialIngest read UNOVERSE_SERVICE_URL with a `|| "http://localhost:4106"`
+       * fallback — a variable that is set NOWHERE in this repo, so the fallback was the whole
+       * behaviour. Deriving it removes both the dead variable and the hardcoded string.
+       */
+      platformUrl: `http://127.0.0.1:${process.env.UNOVERSE_RUNTIME_PORT ?? 4106}`,
     },
   });
+}
+
+/**
+ * The platform's audio lane, through the same handle a code node already gets.
+ *
+ * `null` when the platform has no lane, and that is NOT an error: a voice node with nowhere to
+ * send audio still holds a valid conversation with the vendor, and its transcripts still reach
+ * the workflow over the events table. Only the audio is lost, which is the correct degradation
+ * for a headless run.
+ */
+function audioLaneFor(executionContext: any) {
+  return executionContext?.api?.getAudioWebSocketManager?.() ?? null;
 }
 
 /** Redis, through the handle the plugin library already provides to a code node. */
@@ -103,7 +151,7 @@ async function toolBridgeFor(executionContext: any): Promise<ToolBridge | undefi
   const api = executionContext?.api;
   if (!api?.callService) return undefined;
 
-  const harness: any = await import("@unoverse-platform/plugin-base/agent-mcp");
+  const harness: any = await import("../agent-mcp/index.js");
 
   let schema: any;
   try {
@@ -201,11 +249,21 @@ export class ManifestPromiseExecutor {
    */
   async handleServiceCall(method: string, params: any, config: any, executionContext: any): Promise<unknown> {
     const node = manifestFor(this.nodeType);
+    // The service channel is gated too, and it is the one that would be missed. A node
+    // reached over a service edge never fires its own connectors, so it is easy to think of
+    // as an internal detail of the caller. It is not: it runs this node's calls with this
+    // node's credentials, and leaving it open would make a service edge the way around a
+    // role rather than a way to reuse a capability.
+    assertAuthorized(node, executionContext, config);
     return performService(node, method, params ?? {}, contextFor(node, {}, config, executionContext), stateStoreFor(executionContext));
   }
 
   async execute(inputs: any, config: any, executionContext: any): Promise<{ __outputs: Record<string, unknown> }> {
     const node = manifestFor(this.nodeType);
+    // BEFORE anything is built or sent, so a refused run costs no vendor request, no token,
+    // and no side effect. Authorization that runs after the call has gone out is an audit
+    // log, not a gate.
+    assertAuthorized(node, executionContext, config);
     const { outputs } = await performApi(
       node,
       contextFor(node, inputs, config, executionContext),
@@ -235,6 +293,12 @@ export class ManifestCallbackExecutor {
    */
   async handleServiceCall(method: string, params: any, config: any, executionContext: any): Promise<unknown> {
     const node = manifestFor(this.nodeType);
+    // The service channel is gated too, and it is the one that would be missed. A node
+    // reached over a service edge never fires its own connectors, so it is easy to think of
+    // as an internal detail of the caller. It is not: it runs this node's calls with this
+    // node's credentials, and leaving it open would make a service edge the way around a
+    // role rather than a way to reuse a capability.
+    assertAuthorized(node, executionContext, config);
     return performService(node, method, params ?? {}, contextFor(node, {}, config, executionContext), stateStoreFor(executionContext));
   }
 
@@ -255,6 +319,9 @@ export class ManifestCallbackExecutor {
     executionContext?: any,
   ): Promise<Record<string, unknown>> {
     const node = manifestFor(this.nodeType);
+    // Same gate on the streaming path. `this.executionContext` is the fallback the callback
+    // channel already uses, so the identity checked here is the identity the run carries.
+    assertAuthorized(node, executionContext ?? this.executionContext, event.config);
     const ctx = contextFor(node, event.inputs, event.config, executionContext ?? this.executionContext);
 
     let emitted = 0;
@@ -267,6 +334,9 @@ export class ManifestCallbackExecutor {
       },
       node.api?.toolExchange ? await toolBridgeFor(executionContext ?? this.executionContext) : undefined,
       stateStoreFor(executionContext ?? this.executionContext),
+      // Only this executor gets the lane. A duplex session is always a CallbackNode, so a
+      // PromiseNode has no use for it and should not be handed one.
+      audioLaneFor(executionContext ?? this.executionContext),
     );
 
     // The settled result: whatever `finalize` produced, plus any connector the stream

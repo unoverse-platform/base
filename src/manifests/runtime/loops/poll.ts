@@ -16,11 +16,11 @@
  * reply is a receipt — a job id and nothing else — and handing that back would give the
  * events table a handle where it expected the answer.
  */
-import type { ComposedNode } from "../compose.js";
-import type { RunContext } from "./context.js";
-import { evaluate } from "./templating.js";
-import { sendRequest } from "./request.js";
-import { readSettled, assertOk } from "./response.js";
+import type { ComposedNode } from "../../compose.js";
+import type { RunContext } from "../context.js";
+import { evaluate } from "../templating.js";
+import { sendRequest } from "../http/request.js";
+import { readSettled, assertOk } from "../http/response.js";
 
 /**
  * A hard ceiling on polls, independent of anything the manifest says.
@@ -90,10 +90,29 @@ export async function fetchPolled(
         `(got ${url.trim() ? `"${url}"` : "nothing"}). The start reply was ${JSON.stringify(start).slice(0, 200)}.`,
     );
 
-  // A GET at a complete URL. Auth, headers, retry, transport and error carry over from
-  // the call — a status check is the same conversation with the same vendor — but the
-  // start request's method, body and query do NOT: they described starting work.
-  const statusCall = { ...call, poll: undefined, method: "GET", url, body: undefined, query: undefined };
+  /**
+   * The STATUS CHECK. Auth, headers, retry, transport and error carry over from the call — a status
+   * check is the same conversation with the same vendor — but the start request's method, body and
+   * query do NOT: they described starting work.
+   *
+   * A GET by default, because most vendors put the job id in the path. AWS does not: Textract's
+   * `GetDocumentAnalysis` is a POST carrying `{ JobId }`, signed like any other, and every AWS batch
+   * job is shaped the same way. Hardcoding GET is what kept that whole family in TypeScript.
+   *
+   * `poll.body` is an EXPRESSION over the start reply, exactly like `poll.url`, and resolved here
+   * ONCE for the same reason: the job id exists only in that first response. Resolving it per
+   * attempt against the latest status would work for vendors that echo the id back and quietly
+   * break for the ones that do not — the identical trap the url comment above describes.
+   */
+  const statusBody = p.body ? await evaluate(p.body, scope(start)) : undefined;
+  const statusCall = {
+    ...call,
+    poll: undefined,
+    method: p.method ?? "GET",
+    url,
+    body: statusBody,
+    query: undefined,
+  };
 
   // RESOLVED, not read: how long to wait is often a dial a person sets, so both may be an
   // expression over config rather than a constant the manifest bakes in. Same treatment as

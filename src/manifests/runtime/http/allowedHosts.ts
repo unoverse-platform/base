@@ -28,7 +28,12 @@ export function assertAllowedHost(
   let host: string;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1")
+    // `wss:` is https for sockets: TLS from the first byte, and the handshake IS an https
+    // request that then upgrades. A duplex node carries its bearer token on that handshake, so
+    // this must accept wss and must keep refusing plain `ws:`, which would put the credential
+    // on the wire in clear text exactly as `http:` would.
+    const secure = parsed.protocol === "https:" || parsed.protocol === "wss:";
+    if (!secure && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1")
       throw new Error(`${nodeType}: refusing a non-https request to ${parsed.protocol}//${parsed.host} — a credential must not travel in clear text`);
     host = parsed.host.toLowerCase();
   } catch (err: any) {

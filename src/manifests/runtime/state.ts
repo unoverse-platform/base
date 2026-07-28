@@ -6,11 +6,19 @@
  * nothing new is introduced: a manifest simply NAMES an operation the platform already
  * performs (DECLARATIVE_NODES.md §2).
  *
- * Three operations, which is what the retired CRM code needed and no more:
+ * Four operations, which is what the retired CRM and Code nodes needed and no more:
  *
  *   read    the value at a key, or {} when cold
  *   merge   shallow-merge a patch into it, stamped with updatedAt
  *   drain   pop up to `max` items off a list, oldest first
+ *   save    put this node's value into the RUN's saved-context hash, so a later template
+ *           reaches it as saved.<nodeId>
+ *
+ * `save` NAMES NO KEY, and that is the whole reason it is a separate operation rather than a
+ * `merge` the manifest addresses itself. Its key belongs to the ENGINE — NodeExecutionContext
+ * reads `saved:<executionId>` when it builds the template scope, and workflowActions deletes it
+ * when the run ends — so a manifest writing that key by hand would be guessing at another
+ * component's private layout, and would also get the namespace exactly wrong (see below).
  *
  * THE NAMESPACE IS APPLIED HERE, never by the manifest. `REDIS_NAMESPACE` is a deployment
  * fact, and the memory server prefixes its own keys with it. A manifest that had to
@@ -19,11 +27,24 @@
  * writes the logical key and cannot get this wrong.
  */
 
+import { makeLoopOps, type LoopOps } from "./loops/loop.js";
+
 /** What the executor needs from Redis. Injected, so this file touches no platform global. */
 export interface StateStore {
   read(key: string): Promise<Record<string, unknown>>;
   merge(key: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
   drain(key: string, max: number): Promise<unknown[]>;
+  /** The run's saved-context hash. Takes ids, not a key: the layout is the engine's, not ours. */
+  save(executionId: string, nodeId: string, value: unknown): Promise<unknown>;
+  /**
+   * ITERATION BOOKKEEPING, implemented in loops/loop.ts and carried here.
+   *
+   * It hangs off this interface rather than being a seventh argument threaded through
+   * performApi, runCalls and runFinal because it needs exactly the same thing this store
+   * needs — the Redis handle — and every one of those call sites already has the store. A
+   * parallel parameter would be four signature changes to deliver one dependency twice.
+   */
+  loop?: LoopOps;
 }
 
 /** Bound to a live client. `null` when the platform has no Redis, which is not an error. */
@@ -43,6 +64,10 @@ export function makeStateStore(redis: any, namespace: string | undefined): State
   };
 
   return {
+    // Same client, same namespace. See loops/loop.ts for why a loop is one capability rather
+    // than the seven raw Redis commands the retired nodes reached for.
+    loop: makeLoopOps(redis, namespace),
+
     async read(key) {
       return parse(await redis.get(full(key)));
     },
@@ -54,6 +79,30 @@ export function makeStateStore(redis: any, namespace: string | undefined): State
       const next = { ...parse(await redis.get(full(key))), ...patch, updatedAt: new Date().toISOString() };
       await redis.set(full(key), JSON.stringify(next));
       return next;
+    },
+
+    /**
+     * `saved:<executionId>`, one hash field per node — the ENGINE's layout, matched exactly.
+     *
+     * NOT namespaced, deliberately, and it is the one key here that must not be. Every other key
+     * in this file is ours and is shared with the memory server, which prefixes. This one is read
+     * by `NodeExecutionContext` and deleted by `workflowActions` with a bare `saved:${executionId}`,
+     * so prefixing it would put the value somewhere nothing looks. That failure is invisible: the
+     * write succeeds, the toggle appears to work, and `{{ saved.x }}` is quietly empty forever.
+     * Hence `full()` is not applied and this comment sits where someone would think to add it.
+     *
+     * TTL matches the retired node's hour, which is also the loop state's. It is a within-run
+     * cache, and the engine deletes the key at the end of a run anyway — the expiry is only there
+     * so a run that dies without cleaning up does not leak the key.
+     */
+    async save(executionId, nodeId, value) {
+      const key = `saved:${executionId}`;
+      await redis.hset(key, nodeId, JSON.stringify(value ?? null));
+      await redis.expire(key, 3600);
+      // `?? null` so `calls.<name>` always HAS a key once this ran. Returning undefined would be
+      // indistinguishable from the call being skipped, and that distinction is exactly what the
+      // `__saveToContext` flag is derived from.
+      return value ?? null;
     },
 
     async drain(key, max) {
@@ -84,19 +133,28 @@ export function makeStateStore(redis: any, namespace: string | undefined): State
 export async function performState(
   op: string,
   key: string,
-  value: Record<string, unknown> | undefined,
+  value: unknown,
   max: number | undefined,
   store: StateStore | undefined,
+  /** Only `save` reads this: its key is the run's, not the manifest's. */
+  scope: { executionId?: string; nodeId?: string } = {},
 ): Promise<unknown> {
-  if (!store) return op === "drain" ? [] : {};
+  if (!store) return op === "drain" ? [] : op === "save" ? (value ?? null) : {};
 
   switch (op) {
     case "read":
       return store.read(key);
     case "merge":
-      return store.merge(key, value ?? {});
+      return store.merge(key, (value as Record<string, unknown>) ?? {});
     case "drain":
       return store.drain(key, max ?? 25);
+    case "save":
+      // Both ids or nothing. A save keyed by "undefined" would write a hash no run ever reads,
+      // and would look identical to a working one from the manifest's side. The retired node
+      // defaulted the node id instead, which silently merged two nodes into one field.
+      if (!scope.executionId || !scope.nodeId)
+        throw new Error(`state "save" needs the run's executionId and nodeId, and this run supplied neither`);
+      return store.save(scope.executionId, scope.nodeId, value);
     default:
       throw new Error(`state operation "${op}" is declared in the schema but not implemented in the executor`);
   }
