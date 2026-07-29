@@ -47,6 +47,7 @@ export { performLoop, normaliseItems, makeLoopOps, type LoopOps, type LoopPass, 
 export { makeEmitter, type Emitter, type EventSource } from "./events.js";
 export { makeNarrator, type Narrator } from "./narrate.js";
 export { runToolLoop, type ToolBridge } from "./tools/toolloop.js";
+export { performDoc, MUTATING_DOC_OPS, docKeyFor } from "./docstore/index.js";
 export { runDuplexSession } from "./duplex/session.js";
 // The audio lane is its own module: session.ts owns the VENDOR socket, audioLane.ts owns the bytes
 // and the browser. Two sockets, two files.

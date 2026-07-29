@@ -15,6 +15,7 @@ import { signAwsRequest, presignAwsUrl, encodeDynamoJson, decodeDynamoJson, type
 import { fetchPaginated } from "../loops/paginate.js";
 import { fetchPolled } from "../loops/poll.js";
 import { performLoop } from "../loops/loop.js";
+import { performDoc } from "../docstore/index.js";
 import { sendChunked } from "../loops/chunk.js";
 
 /**
@@ -328,6 +329,25 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
        * same reasoning as `binary` above: the default JSON header is a lie about what is being sent.
        */
       delete (init.headers as Record<string, string>)["Content-Type"];
+    } else if (requestSpec?.encoding === "ndjson") {
+      /**
+       * NEWLINE-DELIMITED JSON: one complete JSON document per line, no enclosing array and
+       * no commas between them. Pinecone's integrated-inference upsert is the reason — it
+       * takes a batch of records this way so a server can stream them without holding the
+       * whole batch in memory.
+       *
+       * THE ARRAY IS NOT THE BODY. `JSON.stringify` of the same records would produce
+       * `[{...},{...}]`, which is valid JSON and a 400 here: the vendor parses line by line
+       * and the very first line would be an unterminated document. That is why this is an
+       * encoding rather than something a manifest could express by hand — an expression
+       * returning a pre-joined string would be a string, and every other encoding starts
+       * from the same plain resolved value.
+       */
+      const rows = Array.isArray(resolved) ? resolved : [resolved];
+      init.body = rows.map((row) => JSON.stringify(row)).join("\n");
+      // Not application/json: a server dispatching on content type would hand this to a
+      // strict JSON parser, which fails on the second line.
+      (init.headers as Record<string, string>)["Content-Type"] = "application/x-ndjson";
     } else {
       // BEFORE signing, because the signature covers the bytes actually sent. Encoding after
       // would sign one body and send another, which AWS rejects with a signature mismatch.
@@ -438,6 +458,26 @@ export async function runCalls(
         store,
         ctx.scope,
       );
+      results[call.name] = payload;
+      last = payload;
+      continue;
+    }
+
+    /**
+     * A DOCSTORE operation — the sectioned, hash-checked markdown document in Redis
+     * (docstore/index.ts). In this list for the same reason `state` and `loop` are: it is a
+     * platform capability the manifest NAMES, not a request, and it belongs to the sequence.
+     *
+     * `params` defaults to the CALLER'S params, because nine of the ten ops exist as service
+     * methods whose arguments arrive exactly there; an explicit `params` expression overrides
+     * for the odd case. The doc's KEY is derived from the run's own ids inside performDoc —
+     * never from the manifest, which could otherwise read another conversation's document.
+     */
+    if (call.docstore) {
+      const args = call.params
+        ? ((await evaluate(call.params, scoped as unknown as Record<string, unknown>)) as Record<string, any>)
+        : ctx.params;
+      const payload = await performDoc(String(call.docstore), args ?? {}, store?.raw, ctx.scope, ctx.config);
       results[call.name] = payload;
       last = payload;
       continue;

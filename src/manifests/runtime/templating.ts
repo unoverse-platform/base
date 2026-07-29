@@ -28,6 +28,7 @@ import type { RunContext } from "./context.js";
  */
 import { evaluateSafeExpression } from "../../template/SafeExpression.js";
 import { resolveStringTemplate } from "../../template/StringTemplateResolver.js";
+import { currentHelpers } from "./helpers.js";
 
 /**
  * Kept as a no-op rather than deleted. It existed to await a dynamic import, and there is
@@ -81,6 +82,29 @@ export function render(value: any, ctx: RunContext): any {
  * and the evaluation itself is synchronous now that the sandbox is imported rather than
  * fetched.
  */
-export async function evaluate(expr: string, scope: Record<string, unknown>): Promise<unknown> {
-  return evaluateSafeExpression(expr.replace(/^return\s+/, ""), scope);
+export async function evaluate(expr: unknown, scope: Record<string, unknown>): Promise<unknown> {
+  /**
+   * A LITERAL IS ITSELF. Only a string is code; anything else is data the author wrote out.
+   *
+   * `getSchema` is what forced this. A method that hands back a constant document had only
+   * one way to say so — a `return { ... }` expression — which meant a large object encoded
+   * inside a YAML string, with every inner quote escaped and no editor able to check it.
+   * Authors write YAML everywhere else in this format; making them write JavaScript-in-a-
+   * string to express a constant was the format's problem, not theirs.
+   *
+   * Nothing is evaluated here, so a literal cannot fail, cannot reference scope, and cannot
+   * be a smuggling route: it is returned exactly as parsed.
+   */
+  if (typeof expr !== "string") return expr;
+  /**
+   * The package's named helpers, added HERE rather than at each of the fifty-odd call sites
+   * that build a scope. A helper that worked in `returns` but not in an events row would be
+   * the sort of inconsistency nobody can predict from reading the manifest.
+   *
+   * A scope that already carries `helpers` wins, so a caller can still pass its own — and so
+   * this cannot silently shadow something a future scope defines.
+   */
+  const helpers = currentHelpers();
+  const withBag = helpers && !("helpers" in scope) ? { ...scope, helpers } : scope;
+  return evaluateSafeExpression(expr.replace(/^return\s+/, ""), withBag);
 }

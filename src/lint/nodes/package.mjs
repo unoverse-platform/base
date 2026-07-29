@@ -96,6 +96,14 @@ export function lintPackage(dir) {
   if (existsSync(sharedDir))
     for (const f of readdirSync(sharedDir).filter((f) => /\.ya?ml$/.test(f))) {
       const n = refCounts.get(join(sharedDir, f))?.size ?? 0;
+      /**
+       * A HELPERS FILE IS REACHED BY NAME, not by $ref: `helpers:` declarations are collected
+       * from every shared file and called as `helpers.someName(...)` from inside an
+       * expression. Counting $refs alone reads that as dead and tells the author to delete
+       * the file their node depends on — the worst possible advice, delivered confidently.
+       */
+      const declaresHelpers = /^helpers\s*:/m.test(readFileSync(join(sharedDir, f), "utf8"));
+      if (declaresHelpers) continue;
       if (n === 0) report("warn", rel(join(sharedDir, f)), `is referenced by nothing. Delete it or $ref it`);
       else if (n === 1) report("hint", rel(join(sharedDir, f)), `has a single consumer. A fragment earns shared/ at the SECOND one, otherwise inline it`);
     }

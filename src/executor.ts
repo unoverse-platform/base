@@ -220,7 +220,21 @@ export async function executeServiceCall(
   }
 
   const ExecutorClass = nodeDef.executor.executor || nodeDef.executor;
-  const executor = new ExecutorClass();
+  /**
+   * WITH THE NODE TYPE, like the two other construction sites in this file.
+   *
+   * A code node's executor hardcodes its own type in its constructor, so `new ExecutorClass()`
+   * worked for every one of them and the missing argument sat here unnoticed. The two SHARED
+   * manifest classes cannot: one class serves every manifest node, so the type IS the
+   * argument, and without it `this.nodeType` is undefined and the lookup fails with
+   * `No manifest loaded for node type "undefined"`.
+   *
+   * It broke the SERVICE channel only, which is why it survived the whole migration: every
+   * manifest node so far is reached by the graph (executePromiseNode / executeCallbackNode
+   * above, both of which pass it). SpatialSearch is the first manifest node that is ONLY ever
+   * called as a service, so it is the first to hit this line.
+   */
+  const executor = new ExecutorClass(nodeDef.type);
 
   // Inject logger into executor (base classes expect this.logger)
   executor.logger = createLogger(nodeType);

@@ -30,6 +30,7 @@ import { fetchPaginated } from "../loops/paginate.js";
 import { fetchPolled } from "../loops/poll.js";
 import { sendChunked } from "../loops/chunk.js";
 import { performLoop } from "../loops/loop.js";
+import { performDoc } from "../docstore/index.js";
 import type { Emitter } from "../events.js";
 import type { ToolBridge } from "../tools/toolloop.js";
 
@@ -49,6 +50,17 @@ export async function runFinal(
     await emitter.response(payload);
     return 200;
   };
+
+  // A DOCSTORE op as the last (often only) call — SmartDocument's whole workflow channel is
+  // one `docstore: render`. Same defaulting as the runCalls branch: arguments are the
+  // caller's params unless the call names its own, and the doc's key derives from the run's
+  // ids inside performDoc.
+  if (call.docstore) {
+    const args = call.params
+      ? ((await evaluate(call.params, ctx as unknown as Record<string, unknown>)) as Record<string, any>)
+      : ctx.params;
+    return settle(await performDoc(String(call.docstore), args ?? {}, store?.raw, ctx.scope, ctx.config));
+  }
 
   // A node whose LAST act is a state write settles on that write, so the events table can
   // emit what was stored.

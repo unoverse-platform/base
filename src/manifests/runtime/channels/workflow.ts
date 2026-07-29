@@ -21,6 +21,9 @@ import { makeEmitter } from "../events.js";
 import { makeNarrator } from "../narrate.js";
 import { runToolLoop, type ToolBridge } from "../tools/toolloop.js";
 import { runFinal } from "./final.js";
+import { withHelpers } from "../helpers.js";
+import { clientTransport } from "../../../platform/clientTransport.js";
+import type { CallerSession } from "./service.js";
 
 export interface RunResult {
   outputs: Record<string, unknown>;
@@ -39,6 +42,22 @@ export async function performApi(
   tools?: ToolBridge,
   store?: StateStore,
   lane?: AudioLane | null,
+  session?: CallerSession,
+): Promise<RunResult> {
+  // The package's named helpers, bound for the whole run — see the same wrapper on the
+  // service channel. Every expression this run evaluates, in a call or an events row or a
+  // tool exchange, sees the same bag.
+  return withHelpers(node, () => runApi(node, ctx, onEmit, tools, store, lane, session));
+}
+
+async function runApi(
+  node: ComposedNode,
+  ctx: RunContext,
+  onEmit: (e: Emission) => void = () => {},
+  tools?: ToolBridge,
+  store?: StateStore,
+  lane?: AudioLane | null,
+  session?: CallerSession,
 ): Promise<RunResult> {
   const api = node.api;
   if (!api) throw new Error(`Node "${node.type}" has no api block, so there is nothing to perform`);
@@ -108,7 +127,9 @@ export async function performApi(
   if (eventsOnly) {
     await emitter.response(ctx.signal ?? {});
     const emissions = await emitter.finish();
-    return { outputs: emitter.outputs(), emissions, status: 200 };
+    const outputs = emitter.outputs();
+    await publishTemplateData(node, api, { ...base, output: outputs }, session);
+    return { outputs, emissions, status: 200 };
   }
 
   // Narration first, and on BOTH paths: it is a property of the node, not of tools.
@@ -156,10 +177,61 @@ export async function performApi(
     }
 
     const emissions = await emitter.finish();
-    return { outputs: withSaveFlag(emitter.outputs(), api, base), emissions, status };
+    const outputs = withSaveFlag(emitter.outputs(), api, base);
+    await publishTemplateData(node, api, { ...base, output: outputs }, session);
+    return { outputs, emissions, status };
   } finally {
     narrator.settle();
   }
+}
+
+/**
+ * `publish` — A GENERIC WRITE INTO THE CALLER'S TEMPLATE STATE, the workflow channel's
+ * sibling of the service channel's `renderCards`: both reach the person watching rather
+ * than answer the graph, and both no-op when nobody is (builder, tests, headless, cron).
+ *
+ * AFTER the emitter settles, over `output`, deliberately: the pushed value derives from what
+ * the node actually emitted, so the screen and the graph cannot drift apart — a Suggestions
+ * whose connector carried one object and whose push carried another would be exactly the
+ * half-working that takes an afternoon to see.
+ *
+ * The frame is the one the retired Suggestions node sent and the client already handles
+ * (`connection.ts` TEMPLATE_DATA): the client merges `data` opaquely into template state and
+ * knows no key names — the PRODUCER names them (UNOVERSE_STATE_MODEL §2/§8).
+ *
+ * SAY WHAT HAPPENED, always, for the same reason the card lane learned to: this no-ops three
+ * different ways (no session, nothing evaluated, nobody listening) and silence must not read
+ * as success.
+ */
+async function publishTemplateData(
+  node: ComposedNode,
+  api: NonNullable<ComposedNode["api"]>,
+  scope: Record<string, unknown>,
+  session?: CallerSession,
+): Promise<void> {
+  const spec = api.publish;
+  if (!spec) return;
+  if (spec.when && !(await evaluate(spec.when, scope))) return;
+  const data = await evaluate(spec.data, scope);
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    console.log(`[manifests] ${node.type}: publish evaluated to ${Array.isArray(data) ? "an array" : typeof data} — template state merges OBJECTS, nothing pushed`);
+    return;
+  }
+  if (!session?.userId || !session?.conversationId) {
+    console.log(`[manifests] ${node.type}: template data not pushed — no live session on this run`);
+    return;
+  }
+  const delivered = clientTransport().pushToClient(session.userId, session.conversationId, {
+    type: "TEMPLATE_DATA",
+    chatId: session.chatId,
+    conversationId: session.conversationId,
+    userId: session.userId,
+    data,
+    timestamp: new Date().toISOString(),
+  });
+  console.log(
+    `[manifests] ${node.type}: template data ${delivered ? "pushed" : "found NO listener"} — keys: ${Object.keys(data as object).join(", ") || "(none)"}`,
+  );
 }
 
 /**

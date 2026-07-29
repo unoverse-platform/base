@@ -22,6 +22,26 @@ import type { RawNode, RawPackage } from "./source.js";
 const SECTIONS = ["interface", "config", "api", "test"] as const;
 type Section = (typeof SECTIONS)[number];
 
+/**
+ * DEEP for plain objects, so overriding one field does not delete its siblings.
+ *
+ * A shallow spread made `{ $ref: x, body: { mode: 'intent' } }` REPLACE the imported body
+ * entirely: every other key — the filters, the result cap, the query itself — vanished, and
+ * the request still went out, valid and wrong. Nothing failed, because a body with fewer
+ * keys is a legal body. That is the worst shape of bug this format can produce, and the
+ * whole point of a $ref with siblings is "import a block and adjust one field".
+ *
+ * Arrays REPLACE rather than concatenating: a list is an ordered whole, and merging two
+ * would give an author no way to shorten one.
+ */
+function deepMerge(base: any, over: any): any {
+  if (base === null || typeof base !== "object" || Array.isArray(base)) return over;
+  if (over === null || typeof over !== "object" || Array.isArray(over)) return over;
+  const out = { ...base };
+  for (const [k, v] of Object.entries(over)) out[k] = k in base ? deepMerge(base[k], v) : v;
+  return out;
+}
+
 export interface ComposedNode {
   type: string;
   kind: "PromiseNode" | "CallbackNode";
@@ -46,6 +66,15 @@ export interface ComposedNode {
    * than no declaration, because it looks decided.
    */
   auth: { required: boolean; role?: string };
+  /**
+   * NAMED FUNCTIONS the package's expressions may call, collected from `helpers:` in every
+   * shared/ file (DECLARATIVE_NODES.md §5.4).
+   *
+   * PACKAGE-scoped, not node-scoped, for the same reason `shared/` is: two nodes in one
+   * package almost always project the same vendor's rows the same way, and the alternative
+   * is the copy-paste that `$ref` exists to prevent.
+   */
+  helpers: Record<string, { args?: string[]; body: string }>;
   origin: string;
   /** The registry-shaped definition. */
   definition: Record<string, any>;
@@ -121,7 +150,7 @@ function resolveRefs(value: any, pkg: RawPackage, where: string, depth = 0): any
     );
     if (imported === null || typeof imported !== "object" || Array.isArray(imported))
       throw new ManifestError(`${where}: $ref "${value.$ref}" is not an object, so it cannot be merged with sibling keys`);
-    return { ...(imported as object), ...local };
+    return deepMerge(imported as any, local) as any;
   }
   return Object.fromEntries(keys.map((k) => [k, resolveRefs(value[k], pkg, where, depth)]));
 }
@@ -162,6 +191,44 @@ export function nodeAuth(node: any): { required: boolean; role?: string } {
     return { required: true, role };
   if (typeof raw.required !== "boolean") return { required: true, role };
   return { required: raw.required || role !== undefined, role };
+}
+
+/**
+ * Every `helpers:` declaration across the package's shared/ folder, merged into one bag.
+ *
+ * Collected from ALL shared files rather than one reserved filename, because a helper belongs
+ * next to the thing it serves: the row projection sits in the same file as the search that
+ * produces the rows. A dedicated helpers.yaml would separate them again, which is the problem
+ * this is fixing.
+ *
+ * A DUPLICATE NAME THROWS. Two files defining `row` would otherwise resolve by directory
+ * order, so which one ran depended on a filename — and the loser would look defined, be
+ * readable, and never execute.
+ */
+export function packageHelpers(pkg: RawPackage): Record<string, { args?: string[]; body: string }> {
+  const out: Record<string, { args?: string[]; body: string }> = {};
+  const from: Record<string, string> = {};
+  for (const [file, body] of Object.entries(pkg.shared ?? {})) {
+    if (!/\.ya?ml$/.test(file)) continue;
+    const doc = parse(body, `${pkg.name}/shared/${file}`);
+    const declared = doc?.helpers;
+    if (declared === undefined) continue;
+    if (declared === null || typeof declared !== "object" || Array.isArray(declared))
+      throw new ManifestError(`${pkg.name}/shared/${file}: "helpers" must be a map of name → { args, body }`);
+    for (const [name, def] of Object.entries(declared as Record<string, any>)) {
+      if (name in out)
+        throw new ManifestError(
+          `${pkg.name}: helper "${name}" is defined in both shared/${from[name]} and shared/${file} — a name may only be declared once`,
+        );
+      if (!def || typeof def !== "object" || typeof def.body !== "string" || !def.body.trim())
+        throw new ManifestError(`${pkg.name}/shared/${file}: helper "${name}" needs a non-empty string "body"`);
+      if (def.args !== undefined && (!Array.isArray(def.args) || def.args.some((a: any) => typeof a !== "string")))
+        throw new ManifestError(`${pkg.name}/shared/${file}: helper "${name}" — "args" must be a list of names`);
+      out[name] = { args: def.args, body: def.body };
+      from[name] = file;
+    }
+  }
+  return out;
 }
 
 /** A package's declared allowedHosts hosts. Absent or empty means the package cannot call out. */
@@ -350,6 +417,7 @@ export function composeNode(raw: RawNode, pkg: RawPackage): ComposedNode {
     origin: raw.origin,
     allowedHosts: nodeAllowedHosts(node, packageAllowedHosts(pkg), where),
     auth: nodeAuth(node),
+    helpers: packageHelpers(pkg),
     api,
     // Shaped for the registry (see platform/pluginAPI.ts registerNode), so a manifest
     // node is indistinguishable from a code node everywhere downstream.

@@ -25,7 +25,10 @@ export function assertAllowedHost(
    */
   carriesCredential = true,
 ): void {
+  // BOTH forms: `host` carries the port, `hostname` never does. A pattern cannot express a
+  // port (the schema forbids the colon), so the match below accepts either.
   let host: string;
+  let hostname: string;
   try {
     const parsed = new URL(url);
     // `wss:` is https for sockets: TLS from the first byte, and the handshake IS an https
@@ -36,6 +39,7 @@ export function assertAllowedHost(
     if (!secure && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1")
       throw new Error(`${nodeType}: refusing a non-https request to ${parsed.protocol}//${parsed.host} — a credential must not travel in clear text`);
     host = parsed.host.toLowerCase();
+    hostname = parsed.hostname.toLowerCase();
   } catch (err: any) {
     if (err?.message?.startsWith(nodeType)) throw err;
     throw new Error(`${nodeType}: request url is not a valid URL: ${url}`);
@@ -84,7 +88,23 @@ export function assertAllowedHost(
       // One level only: *.a.com matches x.a.com, not x.y.a.com.
       return host.endsWith(suffix) && !host.slice(0, -suffix.length).includes(".");
     }
-    return host === pattern;
+    /**
+     * EXACT, and a pattern with no port matches ANY port on that host.
+     *
+     * `parsed.host` carries the port when it is not the scheme's default, while
+     * package.schema.json's allowedHosts pattern forbids a colon outright — so a port can
+     * never be written down. Comparing the two strings therefore made every non-default
+     * port UNREACHABLE, with an error naming a host that looked identical to the declared
+     * one: `refusing a request to "127.0.0.1:4106". This package allows "127.0.0.1"`.
+     *
+     * It stayed hidden because vendors are on https/443, where `host` has no port. The
+     * first caller to hit it was a node calling the PLATFORM, which listens on 4106.
+     *
+     * Nothing is weakened: a port could not be expressed in a pattern, so this restricts
+     * exactly what it always restricted, the host. The non-https rule above is unchanged
+     * and still bounds what a plaintext call can reach.
+     */
+    return host === pattern || hostname === pattern;
   });
 
   if (!allowed)

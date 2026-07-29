@@ -343,9 +343,24 @@ export async function runDuplexSession(opts: {
               let output: string;
               try {
                 const args = JSON.parse(rawArgs || "{}");
-                // `lean` before it goes back: a full result can be far larger than the model needs,
-                // and on a voice call every extra token is latency the person hears.
-                output = tools.lean(await tools.call(name, args));
+                /**
+                 * THE SAME ABSORBER the HTTP loop uses, which is the point of it being one
+                 * function: a voice call that discovers an app must open its page exactly as a
+                 * typed one does, and the result must be leaned before it goes back — on a
+                 * voice call every extra token is latency the person hears.
+                 *
+                 * `minted` is DROPPED here, loudly. A live vendor session fixes its tool list
+                 * when the socket opens, so there is nowhere to put a tool discovered
+                 * mid-call. Saying so beats an empty array nobody reads: the page still opens
+                 * and the model still sees the row, it just cannot invoke the app until the
+                 * next turn re-establishes the session.
+                 */
+                const absorbed = await tools.absorb(name, await tools.call(name, args));
+                if (absorbed.minted.length)
+                  console.log(
+                    `[manifests] ${node.type}: ${absorbed.minted.length} app tool(s) discovered mid-call and not registered — a duplex session's tool list is fixed at open`,
+                  );
+                output = absorbed.content;
               } catch (err: any) {
                 // Reported TO THE MODEL rather than thrown. A failed tool on a live call should let
                 // the assistant say it could not do the thing, not drop the conversation.

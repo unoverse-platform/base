@@ -88,12 +88,15 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
   if (node.appWidth !== undefined) {
     if (typeof node.appWidth !== "string" || node.appWidth.trim() === "")
       report("error", file, `"appWidth" must be a CSS width string ("360px", "min(50vw, 760px)") or a named app size ("chat", "rail", "panel") (docs/design/05)`);
-    // A bare name is a STANDARD SIZE — it must exist in the org's app-sizes.json
-    // (rx/orgs/<org>/styles/semantic/app-sizes.json); the server resolves it at serve time.
-    else if (/^[a-z][a-z0-9-]*$/i.test(node.appWidth)) {
+    // `flex` is contract vocabulary, not a token: the surface takes the REMAINING
+    // host space (the SDK reports a full-width app while it is active).
+    // Any other bare name is a STANDARD SIZE — it must exist in the org's
+    // styles/semantic/app-sizes (or the inherited marketplace set); the server
+    // resolves it at serve time, and an unknown name resolves to NOTHING silently.
+    else if (node.appWidth !== "flex" && /^[a-z][a-z0-9-]*$/i.test(node.appWidth)) {
       const sizes = appSizesForFile(file);
       if (sizes && !(node.appWidth in sizes))
-        report("error", file, `"appWidth": "${node.appWidth}" names no app size. Declare it in the org's styles/semantic/app-sizes.json (known: ${Object.keys(sizes).join(", ") || "none"}) (docs/design/05)`);
+        report("error", file, `"appWidth": "${node.appWidth}" names no app size. Use "flex", a CSS width, or a name from styles/semantic/app-sizes (known: ${Object.keys(sizes).join(", ") || "none"}) (docs/design/05)`);
     }
     if (t === "ComponentSlot" && !(node.select && node.select.where))
       report("error", file, `"appWidth" on a ComponentSlot without select.where. Only a reaction surface can slide out; the flow slot never sizes the app (docs/design/05)`);

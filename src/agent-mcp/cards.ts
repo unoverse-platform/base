@@ -95,10 +95,38 @@ export function renderContentCards(
     // Per-row instance id: keys the render `<component>:<rowId>` server-side, so
     // multiple rows sharing one component each get their OWN slice (and a repeat
     // render of the same row re-merges the same slice — idempotent, no dupes).
-    invokeComponentAppNative(card.component, { ...ctx, message: "", props: card.props, instanceId: card.id }).catch(
-      (e: any) => log?.(`content card render failed: ${card.component} — ${e?.message ?? e}`),
+    /**
+     * LOG ON SETTLE, NOT ON DISPATCH.
+     *
+     * This used to print "🎴 Rendered" on the line AFTER the call was fired, never awaited,
+     * so it announced success before the wire call had done anything. A card that 401'd, that
+     * named a tool the server had not registered, or that never came back at all read exactly
+     * like one that worked — and a whole session went by treating that line as proof the cards
+     * were on screen. It was proof of nothing but that the lane had been reached.
+     *
+     * Still fire-and-forget: a slow render must not hold up the answer. Only the REPORT moved.
+     * A held call that never settles now prints "dispatched" and nothing after it, which is
+     * itself the diagnosis — silence used to be indistinguishable from success.
+     */
+    /**
+     * THE IDENTITY IS THE PAYLOAD HERE. A card lands in a turn bubble keyed
+     * `conversationId:chatId`, so a missing or stale chatId renders it into a turn nobody is
+     * looking at — the server reports success and the screen stays empty, which is exactly
+     * the state this lane was in when the call started succeeding but nothing appeared.
+     */
+    log?.(
+      `🎴 dispatching ${card.component} (${card.id}) → conv=${ctx.conversationId ?? "MISSING"} ` +
+        `chat=${ctx.chatId ?? "MISSING"} user=${ctx.userId ?? "MISSING"} token=${ctx.accessToken ? "yes" : "NO"}`,
     );
-    log?.(`🎴 Rendered content card: ${card.component} (${card.id})`);
+    invokeComponentAppNative(card.component, { ...ctx, message: "", props: card.props, instanceId: card.id })
+      .then(() => log?.(`🎴 RENDERED ${card.component} (${card.id})`))
+      .catch((e: any) => {
+        // UN-POISON on failure: the optimistic add above guards concurrent dispatch,
+        // but a failed render marked "rendered" disabled the card for the whole
+        // conversation with one transient error. A later search may retry it.
+        rendered?.delete(card.id);
+        log?.(`🎴 FAILED ${card.component} (${card.id}) — ${e?.message ?? e}`);
+      });
   }
   if (skipped) log?.(`🎴 ${skipped} card(s) already rendered this conversation — skipped`);
 }

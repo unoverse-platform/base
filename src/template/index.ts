@@ -11,5 +11,12 @@
  * Three consumers now, and all three import it the same way: the manifest runtime, the
  * engine's own template resolution, and node config validation.
  */
-export { evaluateSafeExpression, assertParsableExpression, UnsafeExpressionError } from "./SafeExpression.js";
+export {
+  evaluateSafeExpression,
+  assertParsableExpression,
+  assertSupportedExpression,
+  makeHelpers,
+  UnsafeExpressionError,
+  type HelperDef,
+} from "./SafeExpression.js";
 export { resolveStringTemplate, type TemplateContext } from "./StringTemplateResolver.js";

@@ -160,56 +160,20 @@ export function getPluginsDir(): string {
   return PLUGINS_DIR;
 }
 
-// The MINIMUM plugin-base the marketplace nodes need. The republished nodes call the
-// 1.2.x API (hasPlatform/strict getPlatform), so an older copy in the plugins volume
-// breaks every node that resolves it as a sibling. Keep in step with the version the
-// unoverse app itself depends on (package.json — the baked copy).
-const REQUIRED_PLUGIN_BASE = "1.2.5";
-
-function versionAtLeast(installed: string, required: string): boolean {
-  const a = installed.split(".").map(Number);
-  const b = required.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((a[i] ?? 0) > (b[i] ?? 0)) return true;
-    if ((a[i] ?? 0) < (b[i] ?? 0)) return false;
-  }
-  return true;
-}
-
 export function ensurePluginsDir(): void {
   if (!fs.existsSync(PLUGINS_DIR)) {
     fs.mkdirSync(PLUGINS_DIR, { recursive: true });
   }
+  // No seeded dependencies. plugin-base retired 2026-07-29 with the last code node —
+  // an installed package that needs it (an OLD published version) declares it as an
+  // ordinary npm dependency and npm installs it transitively; the self-heal that used
+  // to force-upgrade it existed for PEER-dep node packages, and none remain.
   const pkgJsonPath = path.join(PLUGINS_DIR, "package.json");
   if (!fs.existsSync(pkgJsonPath)) {
     fs.writeFileSync(pkgJsonPath, JSON.stringify({
       name: "gravity-plugins",
       private: true,
-      dependencies: { "@unoverse-platform/plugin-base": `^${REQUIRED_PLUGIN_BASE}` },
+      dependencies: {},
     }, null, 2));
-  }
-
-  // Self-heal the volume's plugin-base: node reconciliation installs-if-missing and
-  // never upgrades, so a volume seeded years ago keeps its original plugin-base
-  // forever while freshly reconciled nodes assume the newer API. Upgrade in place
-  // when the installed copy is older than the platform's minimum.
-  const installedPkg = path.join(PLUGINS_DIR, "node_modules", "@unoverse-platform", "plugin-base", "package.json");
-  let installedVersion: string | null = null;
-  try {
-    installedVersion = JSON.parse(fs.readFileSync(installedPkg, "utf8")).version ?? null;
-  } catch {
-    installedVersion = null; // not installed yet — startup's install pass seeds it
-  }
-  if (installedVersion && !versionAtLeast(installedVersion, REQUIRED_PLUGIN_BASE)) {
-    console.log(`[plugins] plugin-base ${installedVersion} in the plugins volume is below the required ${REQUIRED_PLUGIN_BASE} — upgrading`);
-    try {
-      execSync(`npm install @unoverse-platform/plugin-base@^${REQUIRED_PLUGIN_BASE} --no-audit --no-fund`, {
-        cwd: PLUGINS_DIR,
-        stdio: "pipe",
-      });
-      console.log(`[plugins] plugin-base upgraded to ^${REQUIRED_PLUGIN_BASE}`);
-    } catch (err) {
-      console.error(`[plugins] plugin-base upgrade failed — marketplace nodes may not load:`, err instanceof Error ? err.message : err);
-    }
   }
 }

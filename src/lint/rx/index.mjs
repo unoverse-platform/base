@@ -228,27 +228,31 @@ function checkCondition(vw, file, where) {
 // ── per-node structural walk ──
 // `widthCap` = the tightest numeric maxWidth on this node's ancestor chain (space
 // steps are monotonic, so step names compare numerically).
-// The org's STANDARD APP SIZES (styles/semantic/app-sizes.json) — the names `appWidth`
-// may reference. null = the file is not under an org (no size home to check against).
+// The STANDARD APP SIZES the `appWidth` names may reference. An org's own
+// styles/semantic/app-sizes wins; absent, the org INHERITS the marketplace set
+// (new-org copies themes only — base+semantic are inherited). null = the file is
+// under no sized tree at all. The old version matched only the LEGACY orgs/ path,
+// so on the flat layout it returned null and the whole appWidth check silently
+// skipped — which is how an unresolvable token shipped and cost a day (§9.10).
 const appSizesCache = new Map();
-function appSizesForFile(file) {
-  const m = file.match(/[\\/]orgs[\\/]([^\\/]+)[\\/]/);
-  if (!m) return null;
-  const org = m[1];
-  if (!appSizesCache.has(org)) {
-    const p = defPath(join(dirname(file).split(`${sep}orgs${sep}`)[0], "orgs", org, "styles", "semantic"), "app-sizes");
-    let sizes = {};
-    try {
-      if (existsSync(p)) {
-        const j = readDef(p);
-        for (const [k, v] of Object.entries(j.appSize ?? {})) sizes[k] = typeof v === "string" ? v : v?.$value;
-      }
-    } catch {
-      /* the file lints separately */
-    }
-    appSizesCache.set(org, sizes);
+function readAppSizes(dir) {
+  const p = defPath(join(dir, "styles", "semantic"), "app-sizes");
+  if (!p || !existsSync(p)) return null;
+  try {
+    const sizes = {};
+    for (const [k, v] of Object.entries(readDef(p).appSize ?? {})) sizes[k] = typeof v === "string" ? v : v?.$value;
+    return sizes;
+  } catch {
+    return null; // the file lints separately
   }
-  return appSizesCache.get(org);
+}
+function appSizesForFile(file) {
+  const home = orgDirs.find((d) => file.startsWith(d + sep)) ?? (file.startsWith(DS + sep) ? DS : null);
+  if (!home) return null;
+  // INHERITANCE, not replacement: an org's own set OVERRIDES the marketplace's
+  // name-by-name (bpp redefines `chat` and adds `flex`; `rail`/`panel` stay inherited).
+  if (!appSizesCache.has(home)) appSizesCache.set(home, { ...(readAppSizes(DS) ?? {}), ...(readAppSizes(home) ?? {}) });
+  return appSizesCache.get(home);
 }
 
 // The universal component names (rx/components/*, case-insensitive) — for validating a

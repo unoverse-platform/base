@@ -45,6 +45,13 @@ export interface StateStore {
    * parallel parameter would be four signature changes to deliver one dependency twice.
    */
   loop?: LoopOps;
+  /**
+   * THE LIVE CLIENT ITSELF, for the one capability the four named operations cannot express:
+   * the docstore's WATCH/MULTI transaction (read-check-write as one unit, retried on
+   * conflict). Carried here for the same reason `loop` is — every call site that needs it
+   * already has the store. Capabilities take it from here; a manifest never sees it.
+   */
+  raw?: any;
 }
 
 /** Bound to a live client. `null` when the platform has no Redis, which is not an error. */
@@ -67,6 +74,9 @@ export function makeStateStore(redis: any, namespace: string | undefined): State
     // Same client, same namespace. See loops/loop.ts for why a loop is one capability rather
     // than the seven raw Redis commands the retired nodes reached for.
     loop: makeLoopOps(redis, namespace),
+
+    // The handle itself, for the docstore's WATCH/MULTI transaction (see the interface).
+    raw: redis,
 
     async read(key) {
       return parse(await redis.get(full(key)));

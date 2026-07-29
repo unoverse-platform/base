@@ -46,6 +46,26 @@ export function readYaml(file) {
  * A LONE $ref REPLACES. A $ref WITH SIBLINGS MERGES, local winning, which is what lets a
  * node import a whole shared block and adjust one field.
  */
+/**
+ * DEEP for plain objects, so overriding one field does not delete its siblings.
+ *
+ * A shallow spread made `{ $ref: x, body: { mode: 'intent' } }` REPLACE the imported body
+ * entirely: every other key — the filters, the result cap, the query itself — vanished, and
+ * the request still went out, valid and wrong. Nothing failed, because a body with fewer
+ * keys is a legal body. That is the worst shape of bug this format can produce, and the
+ * whole point of a $ref with siblings is "import a block and adjust one field".
+ *
+ * Arrays REPLACE rather than concatenating: a list is an ordered whole, and merging two
+ * would give an author no way to shorten one.
+ */
+function deepMerge(base, over) {
+  if (base === null || typeof base !== "object" || Array.isArray(base)) return over;
+  if (over === null || typeof over !== "object" || Array.isArray(over)) return over;
+  const out = { ...base };
+  for (const [k, v] of Object.entries(over)) out[k] = k in base ? deepMerge(base[k], v) : v;
+  return out;
+}
+
 export function resolveRefs(value, baseDir, file, seen = new Set()) {
   if (Array.isArray(value)) return value.map((v) => resolveRefs(v, baseDir, file, seen));
   if (!value || typeof value !== "object") return value;
@@ -95,7 +115,7 @@ export function resolveRefs(value, baseDir, file, seen = new Set()) {
       report("error", file, `$ref "${value.$ref}" is not an object, so it cannot be merged with sibling keys`);
       return local;
     }
-    return { ...imported, ...local };
+    return deepMerge(imported, local);
   }
   return Object.fromEntries(keys.map((k) => [k, resolveRefs(value[k], baseDir, file, seen)]));
 }

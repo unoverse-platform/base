@@ -147,9 +147,44 @@ export function lintNode(dir, pkg) {
     const advertised = new Set(
       (iface.serviceConnectors ?? []).filter((s) => s.isService === true).flatMap((s) => s.methods ?? []),
     );
+    /**
+     * `getSchema` IS TOOL DISCOVERY, not a tool, and must NOT appear in `methods`.
+     *
+     * An agent calls it by CONVENTION once per session to learn what the node offers
+     * (ServiceConnector aggregates the replies across every wired MCP node). Listing it
+     * would advertise it to the model as one more tool it could call, which is both useless
+     * to the model and a way to waste a turn.
+     *
+     * So it is exempt from the rule below rather than being an exception an author has to
+     * discover by hitting the error. Nothing else is exempt: every real method must be
+     * advertised or nothing can reach it.
+     */
+    const DISCOVERY_METHOD = "getSchema";
     for (const method of Object.keys(api?.service ?? {}))
-      if (!advertised.has(method))
+      if (method !== DISCOVERY_METHOD && !advertised.has(method))
         report("error", F.api, `api/service.yaml has "${method}" but no serviceConnector with isService: true lists it in methods. Nothing can discover it`);
+
+    /**
+     * A PURE SERVICE NODE MUST SAY SO, or the canvas draws the wrong card.
+     *
+     * Pure means it offers methods and has NO outputs: the graph never runs it, a consumer
+     * calls it. The default card draws input and output dots that can never carry anything,
+     * which invites someone to wire it into the data flow instead of attaching it, and the
+     * wire silently does nothing.
+     *
+     * Caught because SpatialSearch shipped without it and looked like an ordinary node on
+     * the canvas. OpenAIEmbeddingService had been missing it for longer.
+     */
+    if (!outputs.size && api?.service && node.template !== "service")
+      report(
+        "error",
+        F.node,
+        `offers service methods and declares no outputs, so it is a pure service node and needs "template: service". Without it the canvas draws connector dots that can never carry anything (DECLARATIVE_NODES.md §5)`,
+      );
+
+    // The mirror of it: advertising the discovery method as a tool.
+    if (advertised.has(DISCOVERY_METHOD))
+      report("error", F.iface ?? F.node, `a serviceConnector lists "${DISCOVERY_METHOD}" in methods. It is tool DISCOVERY, called by convention, and listing it advertises it to the model as a tool (08-mcp-services.md)`);
     for (const method of advertised)
       if (!api?.service?.[method])
         report("error", F.iface ?? F.node, `advertises method "${method}" but api/service.yaml has no implementation. A consumer calling it gets an error`);
@@ -425,6 +460,23 @@ export function lintNode(dir, pkg) {
       report("error", F.iface ?? F.node, `needs credential "${name}" but no credentials/${name}.yaml exists in this package. A package DECLARES the credentials it needs (04-credentials.md)`);
   }
 
+  /**
+   * NO config.yaml AT ALL is how the run-authorization fields were skipped entirely.
+   *
+   * The rule below lives inside `if (config?.configSchema)`, so a node with no config file
+   * met none of it: SpatialSearch shipped with no `authRequired`, no `authRole`, and lint
+   * clean. The compulsory field was compulsory only for nodes that already had a form.
+   *
+   * An ANNOTATION node is the one real exception: `Note` is canvas furniture with no inputs,
+   * no outputs and no api, so it is never RUN and there is nobody to authorize.
+   */
+  if (!config?.configSchema && !isAnnotation)
+    report(
+      "error",
+      F.node,
+      `has no config.yaml. Every node needs one for the two run-authorization fields, "authRequired" and "authRole" — the workflow builder's control over who may run this box (15-who-can-run-it.md)`,
+    );
+
   // configSchema internal consistency.
   if (config?.configSchema) {
     const props = config.configSchema.properties ?? {};
@@ -599,6 +651,12 @@ export function lintNode(dir, pkg) {
 
   // whenToUse decides whether the node SURFACES to the building agent at all.
   const w = (node.whenToUse ?? "").trim();
+  if (!w) {
+    // Absorbed from scripts/check-node-meta.mjs (2026-07-29, previously an orphan
+    // nothing invoked): a node without whenToUse is invisible to catalog ranking
+    // and marketplace search — a silent discovery failure, so it fails the lint.
+    report("error", F.node, `whenToUse is missing. The ranker embeds it for catalog/semantic search; without it this node cannot be discovered by capability (14-node-discoverability.md)`);
+  }
   if (w) {
     if (/^use this (node|when)/i.test(w))
       report("warn", F.node, `whenToUse opens by restating itself. Lead with the OUTCOME in task vocabulary (14-node-discoverability.md)`);

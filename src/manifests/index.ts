@@ -23,7 +23,7 @@ import {
 } from "../registry.js";
 import { composeNode, composeCredentials, packageVersion, packageMeta, ManifestError, type ComposedNode, type PackageMeta } from "./compose.js";
 import { hashNode, assertUnchanged, IntegrityError } from "./integrity.js";
-import { executorForKind, setManifestLookup } from "./executor.js";
+import { executorForKind, setManifestLookup } from "./executor/index.js";
 import { diskSource, rowsSource, type ManifestSource, type RawPackage } from "./source.js";
 import { fetchNodeRows } from "./rows.js";
 import { isPluginEnabled } from "../plugins/state.js";

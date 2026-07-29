@@ -20,6 +20,16 @@ const MODEL_METADATA_FIELDS = [
   // NO raw image URLs (primaryImage/images): with ref-hydration the model references a
   // row by universal_id and the SERVER fills the bytes — `hasImage` is all it needs.
   "app",
+  /**
+   * A NEED's one editorial field: the short verb its page leads with ("Advance Career",
+   * "Explore Jobs", "Check Requirements"). Needs are extracted rather than authored, so they
+   * carry none of the five fields above and reached the model with no metadata at all.
+   *
+   * Here AND in the node's own keep-list, because this projection runs second and drops
+   * whatever it does not name: either half alone is a no-op. `questions` was considered and
+   * left out — four sentences a row is the cost this projection exists to avoid.
+   */
+  "action",
   "name",
   "kind",
   "org",

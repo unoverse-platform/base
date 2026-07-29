@@ -17,6 +17,7 @@
  * ToolBridge. That is the harness, and the reason agent families drifted apart is that
  * each one re-made those judgements itself.
  */
+import { saveMCPTraceToWorkflow } from "../../../platform/serviceCalls.js";
 import type { ComposedNode } from "../../compose.js";
 import type { RunContext } from "../context.js";
 import { evaluate, render } from "../templating.js";
@@ -30,12 +31,70 @@ export interface ToolBridge {
   discover(): Promise<any[]>;
   /** Execute one call; returns the raw result content. */
   call(name: string, args: any): Promise<string>;
-  /** Tools a DISCOVERY result unlocked. The harness reads the rows and mints them. */
-  mintFrom(toolName: string, resultContent: string): Promise<any[]>;
+  /**
+   * Absorb one tool reply: unlock + shell-open any apps it discovered, and hand back the
+   * MODEL-FACING form of it plus any tools to register.
+   *
+   * ONE method, not a mint call and a lean call, because they are one step. Splitting them
+   * is what let the shell-open between them go missing without anything noticing.
+   */
+  absorb(toolName: string, resultContent: string): Promise<{ content: string; minted: any[] }>;
   /** Does this exchange end the turn? Depends on which tools were WIRED. */
   endsTurn(calls: { name: string; resultContent: string }[]): boolean;
-  /** Project a result down to what the model needs before it goes back. */
-  lean(resultContent: string): string;
+}
+
+/**
+ * ONE TOOL CALL, recorded for the execution timeline.
+ *
+ * FIRE AND FORGET. Observability must never slow a tool loop or fail a run because the
+ * analytics hop was busy, so nothing here is awaited and every error is swallowed to a warn.
+ *
+ * SKIPPED without an executionId, which is the node-test and headless case: there is no
+ * execution to attach a bar to, and posting a trace with no parent would create an orphan
+ * row nothing renders.
+ */
+function recordToolTrace(
+  node: ComposedNode,
+  ctx: RunContext,
+  toolName: string,
+  args: unknown,
+  result: unknown,
+  startTime: number,
+  success: boolean,
+): void {
+  const executionId = (ctx as any)?.scope?.executionId;
+  const parentNodeId = (ctx as any)?.scope?.nodeId;
+  if (!executionId || !parentNodeId) return;
+
+  /**
+   * PARSED, so the trace viewer shows a readable object rather than one escaped string.
+   *
+   * A tool result crosses MCP as text, so `bridge.call` hands back a string. Storing it as
+   * one made the timeline's output pane a wall of `"[{\"universal_id\":\"...` that nobody
+   * can read — which defeats the point of recording it. The parse is best-effort: a tool
+   * that legitimately returns prose keeps its string.
+   */
+  let parsed: unknown = result;
+  if (typeof result === "string") {
+    try {
+      parsed = JSON.parse(result);
+    } catch {
+      parsed = result;
+    }
+  }
+
+  const endTime = Date.now();
+  void saveMCPTraceToWorkflow({
+    executionId,
+    parentNodeId,
+    toolName,
+    arguments: args,
+    result: parsed,
+    startTime,
+    endTime,
+    duration: endTime - startTime,
+    success,
+  }).catch((err: any) => console.warn(`[manifests] ${node.type}: could not save MCP trace: ${err?.message ?? err}`));
 }
 
 export async function runToolLoop(
@@ -142,6 +201,15 @@ export async function runToolLoop(
     if (!calls.length) break;
 
     const exchanges: { name: string; resultContent: string }[] = [];
+    /**
+     * The MODEL-FACING form of each result, alongside the raw one.
+     *
+     * Two arrays because two consumers want different things. `exchanges` keeps the RAW
+     * reply, which is what handoff detection reads. `absorbed` holds what the harness leaned,
+     * which is what goes into the conversation. Leaning `exchanges` in place would silently
+     * change what `endsTurn` sees.
+     */
+    const absorbed: string[] = [];
     let stuck = false;
 
     for (const call of calls) {
@@ -158,21 +226,59 @@ export async function runToolLoop(
       narrate({ kind: "toolCall", toolName: call.name, args });
 
       let content: string;
+      /**
+       * THE TIMELINE BAR, and it is the AGENT's job to record it, not the tool's.
+       *
+       * Every legacy agent did this — OpenAIAgent, Grok, Realtime — and the manifest loop
+       * that replaced them did not, so the nested `findIntent MCP (1 of 5 tools) 1.51s` row
+       * vanished the day `openai` migrated. It looked like a fault in whichever node was
+       * being called, which is where I went looking, twice.
+       *
+       * `success` is the part that matters most. A tool that fails still returns a string to
+       * the model (see the catch below), so from the outside a broken tool and an empty
+       * result are identical: the workflow completes, four green bars, and the model answers
+       * from its own knowledge. That happened three times in one session before anyone could
+       * see it. This flag is what turns it red.
+       */
+      const startedAt = Date.now();
+      let ok = true;
       try {
         content = await bridge.call(call.name, args);
       } catch (err: any) {
         // A failed tool is information for the model, not a crash: it can try another.
+        ok = false;
         content = JSON.stringify({ error: err?.message ?? String(err) });
       }
+      recordToolTrace(node, ctx, call.name, args, content, startedAt, ok);
       exchanges.push({ name: call.name, resultContent: content });
       // The RESULT, and only now that it exists. It is never in the HTTP stream: our loop
       // produced it, which is why it cannot be a `from: response` row.
       await emitter.tool({ name: call.name, args, output: content });
 
-      for (const minted of await bridge.mintFrom(call.name, content))
-        if (minted?.name && !live.some((t) => t?.name === minted.name)) {
-          live.push(await offer(minted));
-          console.log(`[manifests] ${node.type}: minted "${minted.name}" from ${call.name}`);
+      /**
+       * ONE ABSORBER, which is the harness's own rule and the one this loop used to break.
+       *
+       * `handleDiscoveryResult` does three things to a discovery reply — UNLOCK the app,
+       * SHELL-OPEN its page, and LEAN the rows — and its comment says, in as many words,
+       * that it is "never re-implemented in an adapter". This loop re-implemented two of the
+       * three (a mint call here, a lean call after the loop) and dropped the middle one.
+       *
+       * The dropped step was the shell-open: an empty native invoke that paints the page
+       * skeleton the moment an app is discovered, seeded with `__draftRefs` — the ids of the
+       * image-carrying rows the search just returned — so the guest watches a real page
+       * hydrate instead of waiting on a blank panel while the model composes. Nothing failed
+       * when it went missing. The tool was minted, the model answered, and the page simply
+       * never appeared until the model got round to it.
+       *
+       * Every legacy agent called this (runOpenAIAgent.ts:580). After `openai` migrated to
+       * YAML, nothing did: the function stayed exported, and dead.
+       */
+      const { content: forModel, minted } = await bridge.absorb(call.name, content);
+      absorbed.push(forModel);
+      for (const tool of minted)
+        if (tool?.name && !live.some((t) => t?.name === tool.name)) {
+          live.push(await offer(tool));
+          console.log(`[manifests] ${node.type}: minted "${tool.name}" from ${call.name}`);
         }
     }
 
@@ -180,13 +286,11 @@ export async function runToolLoop(
     // A handoff ends the turn even though tools were called.
     if (bridge.endsTurn(exchanges)) break;
 
-    // Leaned first: a search result carries far more than the model needs, and the full
-    // rows were already used for minting above.
+    // Already leaned, by the absorber above. A search result carries far more than the model
+    // needs, and the full rows were consumed by the card lane and the unlock pass first.
     results = [];
     for (let i = 0; i < calls.length; i++)
-      results.push(
-        await evaluate(te.result, { call: { ...calls[i], output: bridge.lean(exchanges[i]?.resultContent ?? "{}") } }),
-      );
+      results.push(await evaluate(te.result, { call: { ...calls[i], output: absorbed[i] ?? "{}" } }));
 
     /**
      * GROW THE TRANSCRIPT, for a vendor that has no chain id.

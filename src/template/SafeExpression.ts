@@ -194,6 +194,67 @@ function assign(scope: Scope, name: string, value: unknown): void {
  */
 const OURS = new WeakSet<Function>();
 
+/**
+ * NAMED HELPER BAGS — objects whose members may be CALLED as methods.
+ *
+ * The member-call rule is "the receiver is a safe-global namespace, or the method name is a
+ * known-safe builtin", which is what keeps `whatever.call(...)` and `x.constructor(...)` out.
+ * A helper bag is neither, so without this a manifest could pass `helpers.row` to `.map()`
+ * and yet not call `helpers.row(r)` directly — the same function, callable one way and not
+ * the other, which is the kind of rule nobody can hold in their head.
+ *
+ * A WeakSet and not a marker property, for the same reason as OURS: only `makeHelpers` below
+ * registers, and nothing an expression can reach may add to it. An object that arrived on the
+ * data context is still not a namespace, however it is shaped.
+ */
+const NAMESPACES = new WeakSet<object>();
+
+/** One named helper: a sandboxed function a manifest can call by name. */
+export interface HelperDef {
+  args?: string[];
+  body: string;
+}
+
+/**
+ * Build a callable bag from `helpers:` declarations in a package's shared/ folder.
+ *
+ * WHY THIS EXISTS: an expression is one string, so a projection of any size had to be written
+ * as one string — a 45-line JavaScript blob inside a YAML scalar, unreadable and undiffable,
+ * with no way to give the parts names. Splitting it needed a way for one expression to call
+ * another, and there wasn't one.
+ *
+ * The bodies are ORDINARY expressions with no extra authority: same sandbox, same allowlist,
+ * same absence of process/require/fetch. A helper sees ONLY its declared arguments and its
+ * sibling helpers — not `config`, not `credentials`, not the caller's scope. That is
+ * deliberate: a named function whose result depends on ambient state it never named is the
+ * thing this format is trying to get away from.
+ *
+ * Parsed EAGERLY, so a typo in a helper fails when the package loads, naming the helper,
+ * rather than on the first request that happens to reach it.
+ */
+export function makeHelpers(defs: Record<string, HelperDef>): Record<string, (...a: unknown[]) => unknown> {
+  const bag: Record<string, (...a: unknown[]) => unknown> = {};
+  for (const [name, def] of Object.entries(defs ?? {})) {
+    const params = Array.isArray(def?.args) ? def.args.map(String) : [];
+    const code = String(def?.body ?? "").replace(/^return\s+/, "");
+    if (!code.trim()) throw new UnsafeExpressionError(`helper '${name}' has an empty body`);
+    // Both checks up front: parsable, and made only of forms the interpreter implements.
+    // The second is what catches an illegal construct on a branch no test happens to enter.
+    parseCached(code);
+    assertSupportedExpression(code);
+    const fn = (...callArgs: unknown[]) => {
+      // Rooted on the bag alone: siblings are reachable, the caller's scope is not.
+      const scope = childScope({ helpers: bag } as Scope);
+      params.forEach((p, i) => declare(scope, p, callArgs[i]));
+      return evalNode(parseCached(code), scope);
+    };
+    OURS.add(fn);
+    bag[name] = fn;
+  }
+  NAMESPACES.add(bag);
+  return bag;
+}
+
 /** Marks a `return`, so it unwinds through nested blocks without using a host exception. */
 const RETURNED = Symbol("returned");
 type Completion = { [RETURNED]: true; value: unknown } | undefined;
@@ -337,11 +398,23 @@ function evalNode(node: any, scope: Scope): unknown {
         // Allow a method call if the receiver is a safe-global namespace (JSON/Math/Object/…),
         // OR the method is a known-safe array/string builtin. Never a user-supplied name that
         // could be `constructor`, `call`, `apply`, `bind`, etc.
-        const isSafeGlobalNs = Object.values(SAFE_GLOBALS).includes(obj as never);
+        const isSafeGlobalNs =
+          Object.values(SAFE_GLOBALS).includes(obj as never) || (obj !== null && typeof obj === "object" && NAMESPACES.has(obj));
         if (!isSafeGlobalNs && !SAFE_METHODS.has(method)) throw new UnsafeExpressionError(`method '${method}'`);
         if (BLOCKED_PROPS.has(method)) throw new UnsafeExpressionError(`method '${method}'`);
         const fn = prop(obj, method);
-        if (typeof fn !== "function") return undefined;
+        if (typeof fn !== "function") {
+          // A HELPER BAG IS A CLOSED NAMESPACE. `helpers.nopeReport(...)` is a misspelling, and
+          // the general member-call rule below — undefined, quietly — turned it into a node that
+          // emits undefined on every connector with nothing anywhere reporting why. Throwing
+          // UnsafeExpressionError (not TypeError) is what lets the author-time expression scan
+          // report it: the scan runs every expression against a dummy scope and deliberately
+          // ignores every error EXCEPT the sandbox's own verdict, because missing DATA is
+          // expected there and a missing NAME never is.
+          if (obj !== null && typeof obj === "object" && NAMESPACES.has(obj))
+            throw new UnsafeExpressionError(`unknown helper '${method}'`);
+          return undefined;
+        }
         return (fn as (...a: unknown[]) => unknown).apply(obj, args);
       }
       // Direct call: only a safe-global function (parseInt, String, …).
@@ -430,6 +503,44 @@ export function evaluateSafeExpression(code: string, context: Scope): unknown {
  *  Used by config validation — replaces a bare `new Function(code)` compile check. */
 export function assertParsableExpression(code: string): void {
   parseCached(code);
+}
+
+/** Every AST node type `evalNode` implements. Anything else is refused at run time. */
+const SUPPORTED = new Set([
+  "ArrayExpression", "ArrowFunctionExpression", "AssignmentExpression", "BinaryExpression",
+  "BlockStatement", "CallExpression", "ConditionalExpression", "EmptyStatement",
+  "ExpressionStatement", "Identifier", "IfStatement", "Literal", "LogicalExpression",
+  "MemberExpression", "ObjectExpression", "Program", "Property", "ReturnStatement",
+  "TemplateLiteral", "TemplateElement", "UnaryExpression", "VariableDeclaration",
+  "VariableDeclarator",
+]);
+
+/**
+ * STATICALLY reject anything the interpreter cannot run, on EVERY branch.
+ *
+ * `assertParsableExpression` above only parses, and the sandbox check that complements it
+ * only sees the path a dummy scope happens to reach. Both missed the same real bug: a
+ * `...spread` inside a `.map()` callback that a dummy scope never entered, because
+ * `response.results` was `{}` and the expression died on "map is not a function" long before
+ * it got there. That error is ignored on purpose, so the spread shipped, reached the vendor,
+ * embedded the query, and failed on the way back with `disallowed expression: SpreadElement`.
+ *
+ * Walking the tree needs no scope and no execution, so a dead branch is checked exactly like
+ * a live one. That is the whole point: an expression is legal or it is not, and which
+ * arguments it happens to receive has nothing to do with it.
+ */
+export function assertSupportedExpression(code: string): void {
+  const walk = (node: any): void => {
+    if (!node || typeof node.type !== "string") return;
+    if (!SUPPORTED.has(node.type)) throw new UnsafeExpressionError(`disallowed expression: ${node.type}`);
+    for (const key of Object.keys(node)) {
+      if (key === "type" || key === "start" || key === "end" || key === "loc") continue;
+      const child = (node as any)[key];
+      if (Array.isArray(child)) child.forEach(walk);
+      else if (child && typeof child === "object") walk(child);
+    }
+  };
+  walk(parseCached(code));
 }
 
 export { UnsafeExpressionError };

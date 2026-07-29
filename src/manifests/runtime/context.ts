@@ -79,7 +79,7 @@ export interface RunContext {
    * its own address. Loopback, because :4106 is the ungated internal listener and is published to
    * 127.0.0.1 only.
    */
-  scope: { userId?: string; workflowId?: string; conversationId?: string; chatId?: string; executionId?: string; nodeId?: string; platformUrl?: string };
+  scope: { userId?: string; workflowId?: string; conversationId?: string; chatId?: string; executionId?: string; nodeId?: string; platformUrl?: string; engineUrl?: string };
   /**
    * THE CONVERSATION SO FAR, for a tool loop against a vendor with no chain id.
    *

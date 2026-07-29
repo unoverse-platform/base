@@ -1,12 +1,22 @@
 /**
  * Plugin Base Types and Classes
- * 
+ *
  * These are copied from @unoverse-platform/plugin-base to remove the
  * compile-time dependency. This allows node-service to start without
  * packages/ being mounted.
- * 
- * Customer plugins still import from @unoverse-platform/plugin-base,
- * which is loaded at runtime from the mounted packages/ directory.
+ *
+ * SINCE 2026-07-29 THIS IS THE ONLY IN-REPO COPY: the plugin-base source retired to
+ * _legacy/plugin-base once the last code node (postgres-toolkit) did, and everything
+ * in-repo that still speaks the plugin protocol — packages/marketplace, the server's
+ * component runtime — imports from here. The PUBLISHED @unoverse-platform/plugin-base
+ * stays on npm, frozen, for externally installed plugins; the loader still names it by
+ * that string.
+ *
+ * A FAITHFUL transcription, including its loosest part: plugin-base's own index exported
+ * `export type EnhancedNodeDefinition = any` (and friends) as LOCAL declarations, which
+ * SHADOW its `export * from "./types"` star export — so every consumer's "typed" imports
+ * were `any` all along. The aliases below reproduce that, rather than pretending the old
+ * package gave marketplace type-safety it never had.
  */
 
 /**
@@ -107,6 +117,89 @@ export function setPlatformDependencies(deps: PlatformDependencies) {
   }
   platformDeps = deps;
 }
+
+/** The loose compile-time aliases plugin-base actually exported (see the header). */
+export type EnhancedNodeDefinition = any;
+export type ValidationResult = any;
+export type NodeExecutionContext = any;
+
+/** Plugin interface that packages implement. Transcribed from plugin-base index.ts. */
+export interface GravityPlugin {
+  name: string;
+  version?: string;
+  description?: string;
+  setup(api: GravityPluginAPI): void | Promise<void>;
+}
+
+/** The API the platform hands a plugin's setup(). Transcribed from plugin-base index.ts. */
+export interface GravityPluginAPI {
+  registerNode(node: PluginNodeDefinition): void;
+  registerService(name: string, service: any): void;
+  registerCredential(credential: any): void;
+  registerComponentPath?(packagePath: string): void;
+  createLogger(name: string): any;
+  getConfig(): any;
+  saveTokenUsage(usage: any): Promise<void>;
+  saveMCPTrace(trace: any): Promise<string>;
+  getNodeCredentials(context: any, credentialName: string): Promise<any>;
+  callService(method: string, params: any, context: any): Promise<any>;
+  getRedisClient(): any;
+  gravityPublish(channel: string, message: any): Promise<void>;
+  getAudioWebSocketManager?: () => any;
+  getWebSocketManager?: () => any;
+  publishStreamingUpdate?: (config: { componentType: string; props: Record<string, any> }) => void;
+  executeNodeWithRouting?: (
+    executeNode: (inputs: any, config: any, context: any) => Promise<any>,
+    params: any,
+    config: any,
+    context: any,
+  ) => Promise<any>;
+  classes: { PromiseNode: any; CallbackNode: any };
+  types: { NodeInputType: any; NodeConcurrency: any };
+}
+
+export interface PluginNodeDefinition {
+  definition: any;
+  executor: any;
+}
+
+/** Helper to create a plugin — the identity function plugin-base always was. */
+export function createPlugin(config: {
+  name: string;
+  version?: string;
+  description?: string;
+  setup: (api: GravityPluginAPI) => void | Promise<void>;
+}): GravityPlugin {
+  return config;
+}
+
+/**
+ * Initialize platform dependencies from the plugin API — transcribed from plugin-base
+ * index.ts, the same field mapping, so a plugin moving its import here behaves
+ * identically at setup time.
+ */
+export function initializePlatformFromAPI(api: GravityPluginAPI) {
+  setPlatformDependencies({
+    PromiseNode: api.classes.PromiseNode,
+    CallbackNode: api.classes.CallbackNode,
+    NodeInputType: api.types.NodeInputType,
+    NodeConcurrency: api.types.NodeConcurrency,
+    getNodeCredentials: api.getNodeCredentials,
+    getConfig: api.getConfig,
+    createLogger: api.createLogger,
+    saveTokenUsage: api.saveTokenUsage,
+    saveMCPTrace: api.saveMCPTrace,
+    callService: api.callService,
+    getRedisClient: api.getRedisClient,
+    gravityPublish: api.gravityPublish,
+    executeNodeWithRouting: api.executeNodeWithRouting,
+    getAudioWebSocketManager: api.getAudioWebSocketManager,
+  } as PlatformDependencies);
+}
+
+// The prop-key reader marketplace's synthesizer uses — base's own copy, re-exported so a
+// plugin needs ONE import root here rather than knowing base's internal layout.
+export { inputPropKeys, type InputPropLike } from "./definitions/inputs.js";
 
 /**
  * Get platform dependencies
