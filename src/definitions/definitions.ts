@@ -158,7 +158,7 @@ export interface UnoverseDefinition {
   description?: string;
   /** TEMPLATES: the spatial-discovery selection text — ranked against user intent
    *  by findIntent, exactly like a node's whenToUse in the node catalog. Write it
-   *  outcome-first in the user's vocabulary (docs-starter/nodes/14-node-discoverability.md);
+   *  outcome-first in the user's vocabulary (packages/docs/nodes/14-node-discoverability.md);
    *  `description` stays the human "what it is". When present it REPLACES
    *  description in the embedded text. */
   whenToUse?: string;

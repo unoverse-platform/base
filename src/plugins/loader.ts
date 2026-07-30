@@ -113,7 +113,7 @@ export async function loadPlugin(pluginName: string, api: any): Promise<string[]
       }
 
       // Stamp package-level marketplace metadata (package.json `gravity`) onto the nodes
-      // this plugin just registered. By the authoring convention (docs-starter/nodes), a
+      // this plugin just registered. By the authoring convention (packages/docs/nodes), a
       // package's icon lives in `gravity.logoUrl` and applies to every node in the package
       // — it is NOT repeated on each createNodeDefinition(). node-service merged this; the
       // Unoverse runtime didn't, so the Canvas drew these nodes with no icon. A node that
