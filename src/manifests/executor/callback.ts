@@ -6,6 +6,7 @@ import { contextFor } from "./context.js";
 import { sessionFor, stateStoreFor, audioLaneFor } from "./session.js";
 import { refireAfterDocMutation } from "./refire.js";
 import { toolBridgeFor } from "./toolBridge.js";
+import { hydrateMemory, ingestMemoryTurn } from "./memory.js";
 
 export class ManifestCallbackExecutor {
   logger: any = console;
@@ -62,7 +63,11 @@ export class ManifestCallbackExecutor {
     // Same gate on the streaming path. `this.executionContext` is the fallback the callback
     // channel already uses, so the identity checked here is the identity the run carries.
     assertAuthorized(node, executionContext ?? this.executionContext, event.config);
-    const ctx = contextFor(node, event.inputs, event.config, executionContext ?? this.executionContext);
+    // The USER-MEMORY lane, before the run: when the node's config declares the toggle,
+    // the person's context snapshot rides the prompt (memory.ts — the executor's job,
+    // never a manifest's). No toggle, no prompt, headless → passes through untouched.
+    const hydratedConfig = await hydrateMemory(event.config, executionContext ?? this.executionContext);
+    const ctx = contextFor(node, event.inputs, hydratedConfig, executionContext ?? this.executionContext);
 
     let emitted = 0;
     const { outputs } = await performApi(
@@ -87,6 +92,11 @@ export class ManifestCallbackExecutor {
     const streamed = new Set(node.api?.response?.events?.map((r: any) => r.emit) ?? []);
     const settled = Object.fromEntries(Object.entries(outputs).filter(([k]) => !streamed.has(k)));
     if (Object.keys(settled).length) emit({ __outputs: settled });
+
+    // The turn complete — original input + final answer to user memory (fire-and-forget,
+    // self-gating on the toggle; the ORIGINAL prompt, not the hydrated one, because the
+    // memory block prepended above must not be re-ingested as something the user said).
+    await ingestMemoryTurn(node.type, event.config, executionContext ?? this.executionContext, outputs);
 
     return { ...state, emitted, isComplete: true };
   }

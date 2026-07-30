@@ -12,7 +12,7 @@
  * fire-and-forget — memory must never block or fail the conversation.
  */
 
-const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || "http://localhost:4104";
+const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || "http://localhost:4114";
 
 export interface ConversationTurn {
   userMessage: string;

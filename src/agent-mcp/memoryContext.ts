@@ -13,7 +13,7 @@
  * simply starts ungrounded — memory must never block or fail the conversation.
  */
 
-const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || "http://localhost:4104";
+const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || "http://localhost:4114";
 const CONTEXT_FETCH_TIMEOUT_MS = 3_000;
 
 /**
