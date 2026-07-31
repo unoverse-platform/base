@@ -18,6 +18,17 @@
 
 const DEBUG = (process.env.LOG_LEVEL ?? "").toLowerCase() === "debug";
 
+// The readout is a product surface: labels recede, values read, addresses invite the
+// click. One accent, no boxes, and everything still greps clean because whole segments
+// are wrapped rather than words. NO_COLOR is the standard opt-out.
+const COLOR = !process.env.NO_COLOR;
+const paint = (code: string) => (s: string) => (COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
+const bold = paint("1");
+const dim = paint("2");
+const cyan = paint("36");
+const yellow = paint("33");
+const red = paint("31");
+
 type Notice = { level: "warn" | "error"; text: string };
 type Endpoint = { label: string; url: string; note?: string };
 
@@ -194,8 +205,9 @@ export const boot = {
 
     const labelWidth = Math.max(...rows.map((r) => r[0].length), ...state.endpoints.map((e) => e.label.length));
     const urlWidth = Math.max(0, ...state.endpoints.map((e) => e.url.length));
-    const out: string[] = ["", `  unoverse    ready in ${ready}s`, ""];
-    for (const [label, value] of rows) out.push(`  ${label.padEnd(labelWidth)}   ${value}`);
+    // Pad BEFORE painting: ANSI codes have width in padEnd's eyes and none on screen.
+    const out: string[] = ["", `  ${bold("unoverse")}    ${dim(`ready in ${ready}s`)}`, ""];
+    for (const [label, value] of rows) out.push(`  ${dim(label.padEnd(labelWidth))}   ${value}`);
     if (state.endpoints.length) {
       const rank = (l: string) => {
         const i = boot.endpointOrder.indexOf(l);
@@ -204,7 +216,7 @@ export const boot = {
       state.endpoints.sort((a, b) => rank(a.label) - rank(b.label));
       out.push("");
       for (const e of state.endpoints) {
-        out.push(`  ${e.label.padEnd(labelWidth)}   ${e.note ? e.url.padEnd(urlWidth) : e.url}${e.note ? `   ${e.note}` : ""}`);
+        out.push(`  ${dim(e.label.padEnd(labelWidth))}   ${cyan(e.note ? e.url.padEnd(urlWidth) : e.url)}${e.note ? `   ${dim(e.note)}` : ""}`);
       }
     }
 
@@ -217,15 +229,17 @@ export const boot = {
       });
 
     const anomalies = [
-      ...state.notices.map((n) => `  ${n.level === "error" ? "✗" : "!"}  ${n.text}`),
+      ...state.notices.map((n) => `  ${n.level === "error" ? red("✗") : yellow("!")}  ${n.text}`),
       ...(state.manifests?.shadowed.length
-        ? [`  !  code wins over manifest for: ${state.manifests.shadowed.join(", ")}`]
+        ? [`  ${yellow("!")}  code wins over manifest for: ${state.manifests.shadowed.join(", ")}`]
         : []),
-      ...(state.pluginsDisabled.length ? [`  !  disabled, so not loaded: ${state.pluginsDisabled.join(", ")}`] : []),
+      ...(state.pluginsDisabled.length
+        ? [`  ${yellow("!")}  disabled, so not loaded: ${state.pluginsDisabled.join(", ")}`]
+        : []),
     ];
     if (anomalies.length) out.push("", ...anomalies);
     out.push("");
-    if (!DEBUG) out.push("  LOG_LEVEL=debug lists every node, credential and package as it loads.", "");
+    if (!DEBUG) out.push(dim("  LOG_LEVEL=debug lists every node, credential and package as it loads."), "");
     console.log(out.join("\n"));
   },
 };
