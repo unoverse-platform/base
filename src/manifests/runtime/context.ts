@@ -120,7 +120,9 @@ export const RESOLVERS: Record<string, (value: any, node: ComposedNode) => any> 
     const options: string[] = field?.enum ?? [];
     if (!value || options.includes(value)) return value || options[0];
     const m = String(value).toLowerCase();
-    const tier = /luna|mini|small|nano/.test(m) ? 0 : /terra|balanced|medium/.test(m) ? 1 : 2;
+    // Tier words cover both families the packages ship: GPT (luna/terra) and Claude
+    // (haiku/sonnet). Anything unrecognised lands on large, the safe over-provision.
+    const tier = /luna|mini|small|nano|haiku/.test(m) ? 0 : /terra|balanced|medium|sonnet/.test(m) ? 1 : 2;
     // Options are listed large first, so index from the end for small.
     const picked = [options[options.length - 1], options[1], options[0]][tier] ?? options[0];
     console.warn(`[manifests] model "${value}" is no longer available — using "${picked}". Update this node.`);

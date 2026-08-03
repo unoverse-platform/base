@@ -174,6 +174,9 @@ export interface UnoverseDefinition {
   icon?: string;
   /** COMPONENTS: manifest version (display only). */
   version?: string;
+  /** COMPONENTS: credential types a lifecycle hook needs, by name. The canvas offers the
+   *  same picker a node gets; the value is resolved server-side and never in this folder. */
+  credentials?: string[];
   root: unknown;
   /** TEMPLATE LAYOUTS (name-sync): present only when the template folder carries
    *  MULTIPLE layouts/ files. Each entry is a fully composed arrangement; the SDK
@@ -253,6 +256,19 @@ function remapFields(node: AnyNode, propMap: Record<string, string>): void {
 // whose field is a `with` key becomes a hardcoded attribute; a visibleWhen guard on a
 // provided (truthy) key is satisfied statically and dropped; `{{key}}` style bindings
 // take the value. Keys the atom doesn't bind are ignored (harmless).
+/** Substitute `{{name}}` anywhere inside a style object, at any depth. */
+function applyStyleLiterals(style: unknown, lits: Record<string, unknown>): void {
+  if (Array.isArray(style)) return style.forEach((v) => applyStyleLiterals(v, lits));
+  if (!style || typeof style !== "object") return;
+  const s = style as AnyNode;
+  for (const k of Object.keys(s)) {
+    const v = s[k];
+    if (typeof v === "string" && v.includes("{{"))
+      s[k] = v.replace(/\{\{(\w[\w.]*)\}\}/g, (m, f) => (f in lits ? String(lits[f]) : m));
+    else if (v && typeof v === "object") applyStyleLiterals(v, lits);
+  }
+}
+
 function applyLiterals(node: AnyNode, lits: Record<string, unknown>): void {
   if (node.bind) {
     for (const attr of Object.keys(node.bind)) {
@@ -268,21 +284,16 @@ function applyLiterals(node: AnyNode, lits: Record<string, unknown>): void {
     if (lits[node.visibleWhen]) delete node.visibleWhen; // statically satisfied
     // falsy literal: keep the (now never-true) guard — the node stays hidden
   }
-  if (node.style && typeof node.style === "object") {
-    const styleLits: AnyNode = node.style;
-    for (const k of Object.keys(styleLits)) {
-      const v = styleLits[k];
-      if (typeof v === "string" && v.includes("{{")) {
-        styleLits[k] = v.replace(/\{\{(\w[\w.]*)\}\}/g, (m, f) => (f in lits ? String(lits[f]) : m));
-      }
-    }
-  }
+  // Style values may NEST (a radial's `at`, a `when` clause's `apply`), so this walks the
+  // whole style object rather than its top level — a `{{value}}` one level down survived
+  // and reached the renderer verbatim.
+  if (node.style && typeof node.style === "object") applyStyleLiterals(node.style as AnyNode, lits);
   if (Array.isArray(node.children)) node.children.forEach((c: AnyNode) => applyLiterals(c, lits));
   if (node.template) applyLiterals(node.template as AnyNode, lits);
   if (node.cases && typeof node.cases === "object") for (const k of Object.keys(node.cases)) applyLiterals(node.cases[k] as AnyNode, lits);
 }
 
-function expandNode(node: AnyNode): AnyNode {
+export function expandNode(node: AnyNode): AnyNode {
   if (node?.type === "Ref") {
     // A Ref inlines an ATOM (the usual case, rx/atoms). It also resolves a marketplace
     // COMPONENT as a fallback, so a template can embed a shared flat component (e.g. the
@@ -428,6 +439,11 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
             // that face on arrival. Falls back to any authored state, else "inline".
             if (m.defaultState)
               def.state = { ...((def.state as Record<string, unknown>) ?? {}), defaultState: m.defaultState };
+            // A hook's credentials, carried so the canvas offers the same picker a node
+            // gets. A component that fetches declares WHICH credential it needs; the value
+            // is resolved server-side at run time and never reaches this folder.
+            if (Array.isArray((m as { credentials?: unknown }).credentials))
+              def.credentials = (m as { credentials?: unknown[] }).credentials!.map(String);
             def.spatial = true;
           }
           // No authored root → the DEFAULT LAYOUT is the root: the manifest names it

@@ -12,6 +12,8 @@ export interface NodeDefinition {
   category: string;
   version: string;
   configSchema: object;
+  /** The authored settings-form field order; the canvas renders listed fields first. */
+  "ui:order"?: string[] | null;
   inputs: object[];
   outputs: object[];
   // Visual properties

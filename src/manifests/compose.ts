@@ -453,6 +453,10 @@ export function composeNode(raw: RawNode, pkg: RawPackage): ComposedNode {
       serviceConnectors: iface.serviceConnectors ?? null,
       isService: (iface.serviceConnectors ?? []).some((s: any) => s?.isService === true),
       configSchema: config.configSchema ?? {},
+      // The authored field order for the settings form. Declared in nearly every config
+      // for as long as the format has existed, but dropped here until Aug 2026, so the
+      // canvas silently fell back to schema declaration order.
+      "ui:order": config["ui:order"] ?? null,
       testData: parts.test?.testData ?? null,
     },
   };

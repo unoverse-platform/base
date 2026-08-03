@@ -26,8 +26,21 @@ import { makeLintFile } from "./file.mjs";
 /**
  * Lint every definition under `rxHome`. Prints nothing, exits nothing.
  * A missing rx folder is REPORTED rather than thrown, so callers get one shape of answer.
+ *
+ * `options.overlay` maps an absolute path to text that STANDS IN for what is on disk.
+ * Studio's editor lints what the developer has typed before it is saved, and the only
+ * honest way to do that is to run THESE rules over it. Without the overlay an editor has
+ * to approximate the rules, which is a second linter, which is the thing this module's
+ * existence rules out. Sibling files are still read from disk: only the file being edited
+ * is substituted.
  */
-export function lintDefinitions(rxHome) {
+export function lintDefinitions(rxHome, options = {}) {
+  const overlay = {};
+  for (const [k, v] of Object.entries(options.overlay ?? {})) overlay[resolve(k)] = v;
+  const readText = (f) => {
+    const hit = overlay[resolve(f)];
+    return hit === undefined ? readFileSync(f, "utf8") : hit;
+  };
   const candidates = rxHome ? [resolve(rxHome)] : [resolve("apps/unoverse/rx"), resolve("rx")];
   const RX = candidates.find(
     (p) => existsSync(join(p, "marketplace")) || existsSync(join(p, "components")) || existsSync(join(p, "atoms")),
@@ -97,6 +110,21 @@ function jsonFiles(dir) {
   return out;
 }
 const isFixture = (f) => /\.states\.(json|yaml)$/.test(f);
+// A LIFECYCLE HOOK, not a UI definition: `onstart.yaml` beside a component declares the
+// calls that fill it. It is checked by the lifecycle rules below and by the node call
+// rules at run time, never by the primitive/token laws that govern a rendered tree.
+// A LIFECYCLE HOOK file, not a UI definition: it declares the calls that fill a component
+// and is named for its HANDLER. Recognised by a sibling manifest naming it.
+const isHook = (f) => {
+  const dir = dirname(f);
+  const mf = defPath(dir, "manifest");
+  if (!mf || !existsSync(mf)) return false;
+  let life;
+  try { life = readDef(mf).lifecycle; } catch { return false; }
+  if (!Array.isArray(life)) return false;
+  const stem = basename(f).replace(/\.(json|ya?ml)$/, "").toLowerCase();
+  return life.some((e) => typeof e === "object" && e && typeof e.handler === "string" && e.handler.toLowerCase() === stem);
+};
 const isManifest = (f) => /^manifest\.(json|yaml)$/.test(basename(f));
 const isTemplatePath = (f) => f.includes(`${sep}templates${sep}`);
 // The DEFINITION ROOT folder for a file: a bare partial lives one level under it
@@ -211,6 +239,103 @@ for (const orgDir of orgDirs) {
         );
   }
 
+// ── lifecycle declarations (the ONE sanctioned code carve-out) ──
+// A component may run server-side code at a platform fire point, and the safety of that
+// rests on the manifest and the thing that runs agreeing. Both halves are checked here so
+// a bad declaration is caught in the terminal and at publish, not by silence at run time.
+// Mirrors server/tests/rx/lifecycle-declaration.test.ts (UNOVERSE_AUTHORING.md §3c).
+const KNOWN_LIFECYCLES = new Set(["onStart", "onEnterView"]);
+const PHASES_WITH_LAYOUTS = new Set(["onEnterView"]); // phases that fire per VIEW
+const PLATFORM_HANDLERS = new Set(["getDetail"]); // named handlers needing no file
+
+// Every credential DEFINITION this universe can offer a form for. They ship with node
+// packages (nodes/<pkg>/credentials/<name>.yaml); a component NAMES one, it never defines
+// one. Declared before the loop that reads it: a `const` referenced above its own
+// declaration throws, and the throw is swallowed by the enclosing try, which would
+// silently disable every rule after it.
+const credentialDefs = new Set();
+{
+  const nodesHome = resolve(RX, "..", "nodes");
+  try {
+    for (const pkg of readdirSync(nodesHome)) {
+      try {
+        for (const f of readdirSync(join(nodesHome, pkg, "credentials"))) if (isDefFile(f)) credentialDefs.add(defName(f));
+      } catch {
+        /* this package ships none */
+      }
+    }
+  } catch {
+    /* no nodes tree beside rx: the rule cannot judge, so it stays quiet */
+  }
+}
+
+for (const orgDir of [DS, ...orgDirs]) {
+  const cdir = join(orgDir, "components");
+  if (!(existsSync(cdir) && statSync(cdir).isDirectory())) continue;
+  for (const entry of readdirSync(cdir)) {
+    const folder = join(cdir, entry);
+    let mf;
+    try {
+      if (!statSync(folder).isDirectory()) continue;
+      mf = defPath(folder, "manifest");
+    } catch {
+      continue;
+    }
+    if (!mf || !existsSync(mf)) continue;
+    let raw;
+    try {
+      raw = readDef(mf).lifecycle;
+    } catch {
+      continue; // malformed manifest is reported elsewhere
+    }
+    const entries = Array.isArray(raw)
+      ? raw
+          .map((r) => (typeof r === "string" ? { phase: r } : r && typeof r === "object" && typeof r.phase === "string" ? r : null))
+          .filter(Boolean)
+      : [];
+    const declared = new Set(entries.map((e) => e.phase.toLowerCase()));
+
+    for (const e of entries) {
+      if (!KNOWN_LIFECYCLES.has(e.phase))
+        report("error", mf, `lifecycle "${e.phase}" is not a phase the platform fires, so it would never run. Known: ${[...KNOWN_LIFECYCLES].join(", ")} (docs/unoverse/UNOVERSE_AUTHORING.md §3c)`);
+      if (e.layouts !== undefined && !PHASES_WITH_LAYOUTS.has(e.phase))
+        report("error", mf, `lifecycle "${e.phase}" declares layouts, but only ${[...PHASES_WITH_LAYOUTS].join(", ")} fires per view — the scope would be ignored`);
+      // WHAT RUNS is named by `handler`; the phase only says WHEN. A custom hook is a
+      // YAML file named for the handler (what it DOES), never for the phase.
+      const custom = e.handler && !PLATFORM_HANDLERS.has(e.handler) ? `${e.handler.toLowerCase()}.yaml` : null;
+      const hookYaml = custom ? existsSync(join(folder, custom)) : false;
+      if (custom && !hookYaml)
+        report("error", mf, `lifecycle "${e.phase}" names handler "${e.handler}", so ${custom} must sit beside this manifest (a custom hook is named for what it does). Or name a platform handler: ${[...PLATFORM_HANDLERS].join(", ")}`);
+      if (!e.handler && !existsSync(join(folder, `${e.phase.toLowerCase()}.js`)))
+        report("error", mf, `lifecycle "${e.phase}" declares no "handler", so nothing would run. Name a platform handler (${[...PLATFORM_HANDLERS].join(", ")}) or your own, with the matching <handler>.yaml beside this manifest`);
+      // Declared calls reach the network, so the hosts they may reach are not optional.
+      if (hookYaml && !Array.isArray(readDef(mf).allowedHosts))
+        report("error", mf, `${custom} makes requests, so this manifest must declare "allowedHosts". Deny by default: no list, no network`);
+
+      // A NAME with no definition behind it is a key nobody can ever enter: nothing offers
+      // a form for it, the hook runs credential-less, the vendor refuses, and the card
+      // renders its preview defaults with no error anywhere. Caught here instead. Skipped
+      // when no definition was found at all, since that means the nodes tree is absent
+      // rather than the name being wrong.
+      if (credentialDefs.size)
+        for (const cname of Array.isArray(readDef(mf).credentials) ? readDef(mf).credentials : [])
+          if (!credentialDefs.has(String(cname)))
+            report(
+              "error",
+              mf,
+              `credential "${cname}" has no definition in any installed node package, so nothing can offer a form to enter it. Install the package that defines it, or name one that exists: ${[...credentialDefs].sort().join(", ")}`,
+            );
+
+    }
+
+    // A handler FILE nothing opted into is un-opted code: it never runs, and a reader
+    // cannot tell that from looking. Name it in the manifest, or delete it.
+    for (const f of readdirSync(folder))
+      if (f.endsWith(".js") && !declared.has(f.slice(0, -3)))
+        report("error", join(folder, f), `${f} is a lifecycle handler no manifest opted into. Add "${f.slice(0, -3)}" to the manifest's lifecycle array, or delete the file — un-opted code never runs`);
+  }
+}
+
 // ── condition (visibleWhen / style.when entry) ──
 function checkCondition(vw, file, where) {
   if (typeof vw === "string") return; // bare truthy field
@@ -283,7 +408,7 @@ function componentNamesForFile(file) {
   const ctx = {
     RX, DS, orgDirs, report, spaceSteps, stepList, checkDimension, checkCondition,
     appSizesForFile, componentNamesForFile, refResolves, atomsDirExists,
-    isFixture, isManifest, isTemplatePath, defRoot,
+    isFixture, isHook, isManifest, isTemplatePath, defRoot, readText,
   };
   const walkNode = makeWalkNode(ctx);
   const lintFile = makeLintFile({ ...ctx, walkNode });

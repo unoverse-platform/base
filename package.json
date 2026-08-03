@@ -1,6 +1,6 @@
 {
   "name": "@unoverse-platform/base",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "description": "The Unoverse YAML runtime: node manifests, rx definitions, and the platform surface a node sees",
   "license": "MIT",
   "repository": {
@@ -43,6 +43,7 @@
     "acorn": "^8.17.0",
     "fast-memoize": "^2.5.2",
     "fast-xml-parser": "^5.2.5",
+    "gray-matter": "^4.0.3",
     "handlebars": "^4.7.8",
     "ioredis": "^5.3.0",
     "lucide": "^1.21.0",

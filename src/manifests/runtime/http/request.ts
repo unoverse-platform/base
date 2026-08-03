@@ -377,6 +377,12 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
     res = await fetchWithTimeout(url, init, requestSpec?.timeoutMs, label);
     if (res.ok) return res;
 
+    // Statuses the manifest declares as an ANSWER rather than a failure (`okOn: [404]`),
+    // so a projection can interpret them — an existence check, a lookup by an id the
+    // model may have mistyped. Without this, the projection's graceful miss-handling is
+    // unreachable: the transport throws first and the caller sees an empty result.
+    if (Array.isArray(requestSpec?.okOn) && requestSpec.okOn.includes(res.status)) return res;
+
     // A minted token can be revoked or expire early, and the vendor says so with a 401.
     // Refresh ONCE and retry, exactly as the retired client did. Guarded by !forceReauth so
     // a genuinely rejected credential fails rather than looping.

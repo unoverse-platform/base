@@ -261,6 +261,24 @@ function iconFromPack(name: string): { viewBox: string; attrs: Record<string, un
   return { viewBox: "0 0 24 24", attrs: LUCIDE_SVG_ATTRS, children: node };
 }
 
+/**
+ * THE ICON VOCABULARY a content record may name, derived from the SERVED set.
+ *
+ * A promoted row carries `features: [{ title, description, icon }]`, where the icon is
+ * chosen by the extractor and rendered by a card from `theme.icons`. Those are two ends of
+ * one contract, and when the extraction prompt carried its own hand-written list they
+ * drifted: the model named icons the renderer could not resolve, and every feature drew a
+ * blank chip. Silently, because a missing glyph is not an error anywhere.
+ *
+ * So the writer asks the renderer. Add a name to `rx/styles/semantic/icons.yaml` and the
+ * extractor may use it on the next call, with no prompt to edit and nothing to keep in step.
+ * Empty (a deployment with no rx tree) leaves the schema to describe the field in words.
+ */
+export function iconVocabulary(org = "default"): string[] {
+  const theme = resolveTheme(`${org}/light`);
+  return theme ? Object.keys(theme.icons).sort() : [];
+}
+
 /** The theme names available — `<org>/<name>` across every styles set, or one org's
  *  bare names when `org` is given (each set typically ships light + dark). */
 export function listThemeNames(org?: string): string[] {

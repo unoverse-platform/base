@@ -6,6 +6,8 @@
  */
 import type { ContentCard, AppInvocationContext } from "./types.js";
 import { invokeComponentAppNative } from "./invoke.js";
+// Pure section helpers, shared with every renderer so the rules live in one place.
+import { toDocument } from "./sections.js";
 
 
 /**
@@ -41,6 +43,14 @@ export function contentCardsFromResults(results: unknown): ContentCard[] {
       props: {
         title: item.title,
         description: item.description,
+        // EVERY card carries `sections`, so a renderer has ONE thing to read. A row promoted
+        // before the structuring pass existed has only `bodyCopy`, which is a valid document
+        // of one prose section — synthesised here rather than in each renderer, and never
+        // overwriting the sections the row already carries.
+        ...(!item.metadata.sections && item.metadata.bodyCopy
+          ? { sections: [{ kind: "prose", heading: "", body: item.metadata.bodyCopy }] }
+          : {}),
+        ...(item.metadata.sections ? toDocument(item.metadata.sections, item.metadata.layout as string) : {}),
         ...(item.source_url
           ? { link: `[${item.metadata.tagline || item.title || item.source_url}](${item.source_url})` }
           : {}),
@@ -118,7 +128,10 @@ export function renderContentCards(
       `🎴 dispatching ${card.component} (${card.id}) → conv=${ctx.conversationId ?? "MISSING"} ` +
         `chat=${ctx.chatId ?? "MISSING"} user=${ctx.userId ?? "MISSING"} token=${ctx.accessToken ? "yes" : "NO"}`,
     );
-    invokeComponentAppNative(card.component, { ...ctx, message: "", props: card.props, instanceId: card.id })
+    // fromRow: this content came from the DATABASE, not from a model composing parts.
+    // Without it the brief referee judges the row — a card that renders the Document
+    // inherits its prose/keyFacts briefs and gets rejected for parts nobody composes.
+    invokeComponentAppNative(card.component, { ...ctx, message: "", props: card.props, instanceId: card.id, fromRow: true })
       .then(() => log?.(`🎴 RENDERED ${card.component} (${card.id})`))
       .catch((e: any) => {
         // UN-POISON on failure: the optimistic add above guards concurrent dispatch,

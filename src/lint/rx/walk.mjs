@@ -122,12 +122,17 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
       // description/maxLength/minItems/maxItems COMPILE into the tool inputSchema. `hydrate` is a
       // NON-schema brief annotation (a hydration hook naming what to hydrate) — a valid brief key
       // that does NOT compile into the schema; allowed here so it doesn't read as a typo.
-      const BRIEF_KEYS = new Set(["description", "maxLength", "minItems", "maxItems", "hydrate"]);
+      // `optional` marks a field the model may omit: a brief saying "empty when the source
+      // gives none" must not compile to a required, minLength-1 string, or the model has to
+      // invent a value to satisfy the schema.
+      const BRIEF_KEYS = new Set(["description", "maxLength", "minItems", "maxItems", "hydrate", "optional"]);
       for (const k of Object.keys(b))
         if (!BRIEF_KEYS.has(k))
-          report("error", file, `brief.${k} is not part of the brief contract. Only description / maxLength / minItems / maxItems (schema) or hydrate (hydration hook) are allowed (docs/design/03)`);
+          report("error", file, `brief.${k} is not part of the brief contract. Only description / maxLength / minItems / maxItems / optional (schema) or hydrate (hydration hook) are allowed (docs/design/03)`);
       if (b.description !== undefined && typeof b.description !== "string")
         report("error", file, `brief.description must be a string. It IS the schema field's description (docs/design/03)`);
+      if (b.optional !== undefined && typeof b.optional !== "boolean")
+        report("error", file, `brief.optional must be a boolean (docs/design/03)`);
       if (b.hydrate !== undefined && typeof b.hydrate !== "string")
         report("error", file, `brief.hydrate must be a string (names the field/source to hydrate) (docs/design/03)`);
       for (const nk of ["maxLength", "minItems", "maxItems"])

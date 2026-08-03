@@ -47,6 +47,10 @@ export function createNodeServiceAPI() {
         category: def.category || "general",
         version: def.version || "1.0.0",
         configSchema: def.configSchema || {},
+        // The authored settings-form order. Must survive into the registry for the same
+        // reason whenToUse must: dropped here means dropped for every node platform-wide,
+        // and the canvas falls back to schema declaration order.
+        "ui:order": def["ui:order"] || null,
         inputs: def.inputs || [],
         outputs: def.outputs || [],
         color: def.color || "#6366f1",

@@ -18,7 +18,7 @@ import { RAW_VALUE, PARTIAL_DIRS } from "./vocabulary.mjs";
 import { isDefFile, defName, defPath, readDef, parseDef } from "./defs.mjs";
 
 export function makeLintFile(ctx) {
-  const { report, walkNode, isFixture, isManifest, isTemplatePath, defRoot, componentNamesForFile, DS, orgDirs, RX } = ctx;
+  const { report, walkNode, isFixture, isHook, isManifest, isTemplatePath, defRoot, componentNamesForFile, DS, orgDirs, RX, readText } = ctx;
 
 function checkStateOrder(order, rootFolder, file, includeLayouts = false) {
   if (!Array.isArray(order)) return;
@@ -44,13 +44,15 @@ function checkStateOrder(order, rootFolder, file, includeLayouts = false) {
 
 // ── lint one file ──
 function lintFile(file) {
-  const src = readFileSync(file, "utf8");
+  // `readText` is disk unless the caller supplied an overlay for this path (index.mjs).
+  // Studio's editor lints unsaved text through exactly these rules that way.
+  const src = readText(file);
 
   // LAW 1 — tokens only (skip manifest + fixture; styles/ is never in a def home).
   // Exempt: `appWidth` — the HOST-facing outer width (state-owned sizing, docs/design/05).
   // It is raw CSS the embed host applies to the app panel ("min(50vw, 760px)", "360px"),
   // never a style the SDK resolves — token law governs the inside, not the envelope.
-  if (!isFixture(file) && !isManifest(file))
+  if (!isFixture(file) && !isHook(file) && !isManifest(file))
     src.split("\n").forEach((line, i) => {
       if (RAW_VALUE.test(line) && !/^\s*"?appWidth"?\s*:/.test(line))
         report("error", file, `raw value. Token names only; add/scale a token in the org styles instead (LAW 1, docs/design/06): ${line.trim()}`, i + 1);
@@ -65,6 +67,7 @@ function lintFile(file) {
   }
 
   if (isFixture(file)) return; // legacy fixture, unused: don't choke
+  if (isHook(file)) return;    // a lifecycle hook: calls + a projection, not a UI tree
 
   if (isManifest(file)) {
     const root = dirname(file);

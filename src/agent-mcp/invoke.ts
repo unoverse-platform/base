@@ -72,6 +72,7 @@ export async function invokeComponentAppNative(
           ...(ctx.chatId ? { chatId: ctx.chatId } : {}),
           ...(ctx.props ? { props: ctx.props } : {}),
           ...(ctx.instanceId ? { instanceId: ctx.instanceId } : {}),
+          ...(ctx.fromRow ? { fromRow: true } : {}),
         },
       },
       undefined,

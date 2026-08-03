@@ -86,6 +86,8 @@ export interface AppInvocationContext {
   props?: Record<string, unknown>;
   /** Content-tree app rows: the ROW id — keys the render `<component>:<instanceId>` so multiple rows sharing a component don't collide. */
   instanceId?: string;
+  /** These props are ROW DATA, not a model's composition — skip the brief referee. */
+  fromRow?: boolean;
   /** Forwarded as a Bearer token so the internal `/mcp` call rides the gated lane too. */
   accessToken?: string;
   /** Internal MCP base; defaults to UNOVERSE_SERVICE_URL or http://localhost:4106. */
