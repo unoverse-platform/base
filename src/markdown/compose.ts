@@ -28,14 +28,30 @@ import { compileBriefSchema } from "./compile.js";
 export const MARKDOWN_CATEGORY = "markdown";
 
 /**
- * SHAPE ADVICE, true of every document whoever asked for it: which component to reach for,
- * and how much structure a document should carry. Not a situation, so it is always sent.
+ * HOW A DOCUMENT IS COMPOSED — true of every document, whoever asked for it and whatever the
+ * business. Not a situation, so it is always sent.
+ *
+ * IT DOES NOT PARTITION. Two attempts were made to get areas out of this call by wording a
+ * per-component `group` field: constraints-first returned a document with NO areas, and
+ * positive-first returned ONE area over two components on a document with four parts. The
+ * fault was never the wording. Partitioning is a judgement about the whole document, and the
+ * field is filled while writing the FIRST component, before there is a whole to judge. It is
+ * a separate pass now (engine `structureDocument`), the way layout already was.
  */
 export const DOCUMENT_COMPOSITION =
-  "Return the document as an ordered list of components. " +
-  "Prose is the default and carries anything Markdown carries. Reach for a structured component " +
-  "ONLY when the source is genuinely structured, never to make a plain passage look busier. " +
-  "A document is mostly prose with a little structure in it; one that is mostly structure reads as a dashboard.";
+  "Return the document as an ordered list of components.\n\n" +
+  "MATCH THE COMPONENT TO THE SHAPE OF THE MATERIAL. Figures a reader would compare are keyFacts; " +
+  "anything stated across two dimensions is a table; an ordered procedure is steps; enumerated items " +
+  "are a list; a question and its answer is faq; a must-not-miss condition is a callout; legal wording " +
+  "is finePrint; everything else is prose. There are two ways to get this wrong and both are common: " +
+  "inflating plain paragraphs into tiles so the page looks busy, and flattening structured material " +
+  "into a bulleted list inside a prose body. The second is not a formatting choice, it hands the " +
+  "reader an unstyled imitation of a component that would have been drawn properly.\n\n" +
+  "Order the components as a reader would read them: what this is, then how it works, then " +
+  "practical detail, then anything legal. Whether the document divides into parts is NOT your " +
+  "decision and there is no field for it: a later pass reads the finished document and partitions " +
+  "it, which is a judgement about the whole and cannot be made while the first component is " +
+  "still being written.";
 
 export interface ComponentType {
   /** The `type` value a component carries, and the atom's ref name. */
@@ -45,6 +61,11 @@ export interface ComponentType {
   description?: string;
   /** The compiled brief schema: this component's fields. */
   schema: Record<string, unknown>;
+}
+
+/** An atom's name as the kind a document carries: the Document switches on exactly this. */
+function kindOf(name: string): string {
+  return name ? name[0].toLowerCase() + name.slice(1) : "";
 }
 
 /** Every Markdown atom, compiled. Sorted so the schema is stable call to call. */
@@ -58,7 +79,10 @@ export function markdownComponentTypes(): ComponentType[] {
     const schema = compileBriefSchema(def as never, { grounding: "" });
     if (!schema) continue;
     out.push({
-      type: String(d.name ?? "").toLowerCase(),
+      // THE KIND IS THE ATOM'S NAME, camelCased: KeyFacts → keyFacts, FinePrint → finePrint.
+      // Lowercasing it produced `keyfacts`, which the Document has no case for, so those
+      // components rendered through the prose fallback and lost their shape entirely.
+      type: kindOf(String(d.name ?? "")),
       whenToUse: typeof d.whenToUse === "string" ? d.whenToUse : undefined,
       description: typeof d.description === "string" ? d.description : undefined,
       schema,
@@ -118,16 +142,8 @@ const DOCUMENT_FIELDS: Record<string, Record<string, unknown>> = {
       "content needs none, which is common for a passage continuing the one above it.",
     maxLength: 60,
   },
-  area: {
-    type: "string",
-    description:
-      "The part of the page this belongs to, in the content's own words (a programme name, " +
-      "'Fees', 'Getting here'). Components sharing a label are read together, so give an " +
-      "area's components the same one and keep them adjacent. Areas must be of comparable " +
-      "weight: no 'everything else' label, and no label used for a single component. Empty " +
-      "string when the material is one subject and has no areas.",
-    maxLength: 40,
-  },
+  // `group`, not `area`: it is what `toDocument` reads, what the tab shaping keys on, and
+  // what every stored row already carries. The wire format meets the renderer where it is.
 };
 
 /**

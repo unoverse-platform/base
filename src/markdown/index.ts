@@ -19,6 +19,8 @@
  *   referee     judge what came back, one part at a time
  *   hydration   which fields the SERVER fills from a row, never the model
  *   gaps        what a page still owes
+ *   document    a finished document SHAPED for the renderer (areas → tabs, text projection)
+ *   partition   divide a finished document into its parts, then derive its layout
  *
  * IN `packages/base` BECAUSE EVERY PRODUCER NEEDS IT: a promoted page, an agent writing
  * mid-conversation, an email, a report. It lived in `server/src/mcp/`, which the engine
@@ -45,3 +47,10 @@ export {
 export { validateBriefPart, validateBriefArgs } from "./referee.js";
 export { collectBriefHydration, type HydrationField, type HydrationLevel } from "./hydration.js";
 export { listBriefGaps } from "./gaps.js";
+export { toDocument, sectionsToText, withGroupStarts, MAX_TABS } from "./document.js";
+export {
+  partitionDocument,
+  type DocumentLayout,
+  type PartitionableComponent,
+  type StructuredAsk,
+} from "./partition.js";

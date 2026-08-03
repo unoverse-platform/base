@@ -7,7 +7,7 @@
 import type { ContentCard, AppInvocationContext } from "./types.js";
 import { invokeComponentAppNative } from "./invoke.js";
 // Pure section helpers, shared with every renderer so the rules live in one place.
-import { toDocument } from "./sections.js";
+import { toDocument } from "../markdown/document.js";
 
 
 /**

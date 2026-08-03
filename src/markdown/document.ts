@@ -1,10 +1,10 @@
 /**
- * Section helpers — pure, dependency-free, and safe to import from a browser bundle.
+ * UNOVERSE MARKDOWN — a document SHAPED FOR THE RENDERER: areas into tabs, and the text
+ * projection for anything wanting words.
  *
- * A record's structured body copy is rendered by the design system on every surface. The
- * rules for reading those sections belong in ONE place, or each renderer re-invents them
- * and they drift. This module is deliberately a leaf: no transport, no server imports, so
- * a UI can use it without dragging the agent runtime into its bundle.
+ * Moved out of `agent-mcp/` because it was never the agent harness's: it is the render half
+ * of Unoverse Markdown, and it sat under the harness only because content cards were the
+ * first thing to need it. The schema half is beside it now.
  */
 
 /**
@@ -61,10 +61,28 @@ export function toDocument(sections: unknown, layout?: string): Record<string, u
     return { tabbed: false, sections: withGroupStarts(flat) };
   }
 
-  const finePrint = list.filter((s) => s.kind === "finePrint");
+  // FINE PRINT, DEDUPED. It repeats into every tab, so two components carrying the same
+  // words print that text twice per tab. A source that says "Terms and conditions apply"
+  // under each of its benefits is not stating two different things.
+  const seenFine = new Set<string>();
+  const finePrint = list.filter((s) => {
+    if (s.kind !== "finePrint") return false;
+    const key = String(s.body ?? "").trim().toLowerCase().replace(/[\s.]+$/, "");
+    if (!key || seenFine.has(key)) return key ? false : true;
+    seenFine.add(key);
+    return true;
+  });
+
+  // WHAT LEADS IS WHAT COMES FIRST, not everything unlabelled. The rule is "material that
+  // introduces the offering is never hidden behind a tab", and introductory material is at
+  // the TOP. Leading every unlabelled component pulled a stray from the middle of the
+  // document up above the tab strip (observed live: a Protection list the model forgot to
+  // label rendered above the tabs, ahead of the opening paragraph).
+  const firstGrouped = list.findIndex((s) => typeof s.group === "string" && s.group);
+  const leadEnd = firstGrouped === -1 ? list.length : firstGrouped;
   const out: Record<string, unknown> = {
     tabbed: true,
-    lead: withGroupStarts(list.filter((s) => !s.group && s.kind !== "finePrint")),
+    lead: withGroupStarts(list.slice(0, leadEnd).filter((s) => !s.group && s.kind !== "finePrint")),
     // ALWAYS carried, even tabbed. The component switches on `tabbed` and ignores it, but a
     // host asking "does this record have a body?" has one field to look at either way. A
     // card guarding on `sections` rendered nothing for a tabbed record without it.
@@ -77,7 +95,16 @@ export function toDocument(sections: unknown, layout?: string): Record<string, u
     // The final tab absorbs every remaining group, so a fifth group is folded in rather
     // than dropped. Its sections keep their labels, since that tab now holds more than one.
     const mine = last ? groups.slice(i) : [group];
-    const own = list.filter((s) => mine.includes(s.group as string) && s.kind !== "finePrint");
+    // An unlabelled component after the lead inherits the area it sits inside, so a
+    // component the model forgot to label stays where the reader found it.
+    let carried = "";
+    const placed = list.map((s, idx) => {
+      if (idx < leadEnd) return s;
+      const g = typeof s.group === "string" && s.group ? s.group : carried;
+      carried = g || carried;
+      return { ...s, group: g };
+    });
+    const own = placed.filter((s) => mine.includes(s.group as string) && s.kind !== "finePrint");
     out[`tab${i}Label`] = group;
     // The tab IS the label for a single group, so its eyebrow would only repeat it. A
     // folded tab keeps them, because it holds several.
