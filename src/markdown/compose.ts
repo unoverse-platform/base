@@ -28,12 +28,11 @@ import { compileBriefSchema } from "./compile.js";
 export const MARKDOWN_CATEGORY = "markdown";
 
 /**
- * What the model is doing here, which is NOT what a page composer does. It has the copy
- * already; the job is to say what shape each part of it is, and to keep the words.
+ * SHAPE ADVICE, true of every document whoever asked for it: which component to reach for,
+ * and how much structure a document should carry. Not a situation, so it is always sent.
  */
-const GROUNDING =
-  "Structure the body copy you have been given as an ordered list of components. " +
-  "Use the source's OWN words: reuse and cut, never add a fact, a figure or a claim it does not state. " +
+export const DOCUMENT_COMPOSITION =
+  "Return the document as an ordered list of components. " +
   "Prose is the default and carries anything Markdown carries. Reach for a structured component " +
   "ONLY when the source is genuinely structured, never to make a plain passage look busier. " +
   "A document is mostly prose with a little structure in it; one that is mostly structure reads as a dashboard.";
@@ -107,11 +106,54 @@ function toStrict(node: unknown): unknown {
 }
 
 /**
- * The document schema: `components`, an array whose items are a discriminated union over the
- * Markdown atoms. `type` is a const per branch, so choosing a component and filling it are one
- * act, and a component the renderer does not have cannot be named.
+ * EVERY COMPONENT CARRIES THESE, whatever its kind. They are the DOCUMENT's concerns rather
+ * than any atom's: an atom draws its own content and knows nothing about the heading above
+ * it or which part of the page it sits in. Declared once here instead of in eight atoms.
  */
-export function compileDocumentSchema(): Record<string, unknown> | null {
+const DOCUMENT_FIELDS: Record<string, Record<string, unknown>> = {
+  heading: {
+    type: "string",
+    description:
+      "Short heading for this component, in the source's own words. Empty string when the " +
+      "content needs none, which is common for a passage continuing the one above it.",
+    maxLength: 60,
+  },
+  area: {
+    type: "string",
+    description:
+      "The part of the page this belongs to, in the content's own words (a programme name, " +
+      "'Fees', 'Getting here'). Components sharing a label are read together, so give an " +
+      "area's components the same one and keep them adjacent. Areas must be of comparable " +
+      "weight: no 'everything else' label, and no label used for a single component. Empty " +
+      "string when the material is one subject and has no areas.",
+    maxLength: 40,
+  },
+};
+
+/**
+ * The document schema: `components`, an array whose items are a discriminated union over the
+ * Markdown atoms. `kind` is a const per branch, so choosing a component and filling it are one
+ * act, and a component the renderer does not have cannot be named.
+ *
+ * `kind`, not `type`, because that is the key the Document component switches on and the key
+ * every stored row already carries. The wire format meeting the renderer where it is costs
+ * one word here and saves a migration.
+ */
+export interface DocumentSchemaOptions {
+  /** The SITUATION, supplied by whoever knows it. Structuring one record's approved copy
+   *  ("the facts are sacred, rewrite the words") and an agent composing from what it already
+   *  knows are different jobs, and neither belongs baked in here. */
+  grounding?: string;
+}
+
+/** The components array on its own, so a caller can store it under whatever name it uses
+ *  (the content pipeline's rows carry it as `sections`). */
+export function compileDocumentComponents(): Record<string, unknown> | null {
+  const full = compileDocumentSchema();
+  return full ? ((full.properties as Record<string, unknown>).components as Record<string, unknown>) : null;
+}
+
+export function compileDocumentSchema(opts: DocumentSchemaOptions = {}): Record<string, unknown> | null {
   const types = markdownComponentTypes();
   if (!types.length) return null;
 
@@ -131,24 +173,26 @@ export function compileDocumentSchema(): Record<string, unknown> | null {
       // thing it describes, and it travels here automatically.
       description: [t.description, t.whenToUse].filter(Boolean).join(" "),
       properties: {
-        type: { type: "string", const: t.type, description: `Renders the ${t.type} component.` },
+        kind: { type: "string", const: t.type, description: `Renders the ${t.type} component.` },
+        ...DOCUMENT_FIELDS,
         ...props,
       },
       // The discriminant is always required. A branch's own fields keep whatever the brief
-      // said, so `optional: true` survives into the union.
-      required: ["type", ...required.filter((r) => Object.keys(props).includes(r))],
+      // said, so `optional: true` survives into the union. `heading` and `area` are required
+      // but may be the empty string: strict mode has no optional, so "absent" is "".
+      required: ["kind", ...Object.keys(DOCUMENT_FIELDS), ...required.filter((r) => Object.keys(props).includes(r))],
       additionalProperties: false,
     };
   });
 
   return toStrict({
     type: "object",
-    description: GROUNDING,
+    description: [opts.grounding ?? "", DOCUMENT_COMPOSITION].filter(Boolean).join(" "),
     properties: {
       components: {
         type: "array",
         description:
-          "The document, in reading order. Each entry names its component type and carries that type's fields.",
+          "The document, in reading order. Each entry names its component kind and carries that kind's fields.",
         minItems: 1,
         items: { anyOf: branches },
       },

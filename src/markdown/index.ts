@@ -33,7 +33,15 @@
 export type { BriefTag, DefNode, ComponentDefLike, Collected } from "./types.js";
 export { collect, tag, boundField } from "./collect.js";
 export { refName, compileBriefSchema, type CompileOptions } from "./compile.js";
-export { MARKDOWN_CATEGORY, markdownComponentTypes, compileDocumentSchema, type ComponentType } from "./compose.js";
+export {
+  MARKDOWN_CATEGORY,
+  DOCUMENT_COMPOSITION,
+  markdownComponentTypes,
+  compileDocumentSchema,
+  compileDocumentComponents,
+  type ComponentType,
+  type DocumentSchemaOptions,
+} from "./compose.js";
 export { validateBriefPart, validateBriefArgs } from "./referee.js";
 export { collectBriefHydration, type HydrationField, type HydrationLevel } from "./hydration.js";
 export { listBriefGaps } from "./gaps.js";
