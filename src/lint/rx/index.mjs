@@ -42,9 +42,39 @@ export function lintDefinitions(rxHome, options = {}) {
     return hit === undefined ? readFileSync(f, "utf8") : hit;
   };
   const candidates = rxHome ? [resolve(rxHome)] : [resolve("apps/unoverse/rx"), resolve("rx")];
-  const RX = candidates.find(
-    (p) => existsSync(join(p, "marketplace")) || existsSync(join(p, "components")) || existsSync(join(p, "atoms")),
-  );
+
+  /** The monorepo's shapes: the design system at `rx/marketplace/`, or the legacy one
+   *  with `components/` and `atoms/` loose at the root. */
+  const holdsDesignSystem = (p) =>
+    existsSync(join(p, "marketplace")) || existsSync(join(p, "components")) || existsSync(join(p, "atoms"));
+
+  /**
+   * A DEVELOPER'S rx/ HOLDS ONLY ORG FOLDERS, and looking for the monorepo's shapes there
+   * finds nothing. `rx/<org>/{components,styles,templates}` is what Studio scaffolds and
+   * the only layout a developer ever has, because the design system is INSTALLED rather
+   * than authored (sync-starter.sh keeps `rx/marketplace` out of a project on purpose).
+   *
+   * So a project could not be linted, and since publishing lints first, it could not be
+   * published either: "no rx/ folder here", naming the rx/ folder it was standing in.
+   */
+  const holdsOrgs = (p) => {
+    if (!existsSync(p)) return false;
+    return readdirSync(p)
+      .filter((e) => !e.startsWith("."))
+      .map((e) => join(p, e))
+      .some((d) => {
+        try {
+          return (
+            statSync(d).isDirectory() &&
+            ["components", "atoms", "styles", "templates"].some((s) => existsSync(join(d, s)))
+          );
+        } catch {
+          return false;
+        }
+      });
+  };
+
+  const RX = candidates.find((p) => holdsDesignSystem(p) || holdsOrgs(p));
   if (!RX)
     return {
       problems: [{ level: "error", file: candidates[0], msg: `no rx/ folder here (looked in: ${candidates.join(", ")})` }],
@@ -80,7 +110,14 @@ const orgDirs = (() => {
       .filter((e) => !e.startsWith("."))
       .map((e) => join(legacyOrgsDir, e))
       .filter((d) => statSync(d).isDirectory());
-  if (DS === RX) return [];
+  // THE LEGACY LAYOUT, where the design system IS the root: `components/` and `atoms/`
+  // sit directly in rx/, so listing children here would lint "components" as an org.
+  //
+  // NOT `DS === RX`, which was the same test until the design system stopped being
+  // guaranteed. DS falls back to RX when no design system is found ANYWHERE, which is the
+  // ordinary state of a developer's project — so that test read "this is the legacy
+  // layout" and returned no orgs, silently linting nothing at all.
+  if (existsSync(join(RX, "components")) || existsSync(join(RX, "atoms"))) return [];
   return readdirSync(RX)
     .filter((e) => !e.startsWith(".") && e !== "marketplace" && e !== "_schema")
     .map((e) => join(RX, e))
@@ -374,9 +411,26 @@ function readAppSizes(dir) {
 function appSizesForFile(file) {
   const home = orgDirs.find((d) => file.startsWith(d + sep)) ?? (file.startsWith(DS + sep) ? DS : null);
   if (!home) return null;
-  // INHERITANCE, not replacement: an org's own set OVERRIDES the marketplace's
-  // name-by-name (bpp redefines `chat` and adds `flex`; `rail`/`panel` stay inherited).
-  if (!appSizesCache.has(home)) appSizesCache.set(home, { ...(readAppSizes(DS) ?? {}), ...(readAppSizes(home) ?? {}) });
+  if (!appSizesCache.has(home)) {
+    // INHERITANCE, not replacement: an org's own set OVERRIDES the marketplace's
+    // name-by-name (bpp redefines `chat` and adds `flex`; `rail`/`panel` stay inherited).
+    const inherited = readAppSizes(DS);
+    /**
+     * A PARTIAL SET IS WORSE THAN NO SET, and this is the same trap the design-system
+     * lookup above already names: judge against half the answer and correct work is
+     * rejected.
+     *
+     * A developer's project has NO design system on disk — it is installed, not authored
+     * — so the inherited half is unreadable and only the org's own names are left. Every
+     * inherited name it uses then "names no app size", which is a lint error on work that
+     * is right, and publishing lints first, so it blocked the publish outright.
+     *
+     * Unreadable is not empty. `null` skips the name check (walk.mjs guards on it), which
+     * is the honest answer: this cannot be verified here, so it is not asserted. In the
+     * monorepo the design system IS present and the check runs exactly as before.
+     */
+    appSizesCache.set(home, inherited === null ? null : { ...inherited, ...(readAppSizes(home) ?? {}) });
+  }
   return appSizesCache.get(home);
 }
 
