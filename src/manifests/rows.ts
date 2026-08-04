@@ -5,26 +5,11 @@
  * over the same internal hop plugin state already uses. Kept in its own file so
  * `source.ts` stays a pure shape-conversion with no transport in it.
  *
- * COULD NOT READ IS NOT THE SAME AS HAS NONE, and conflating them cost a universe every
- * node it owned.
- *
- * This used to answer `[]` for any failure — a bad status, a refused connection, a
- * malformed body — on the reasoning that a universe briefly unable to reach its database
- * should come up with the nodes it has on disk rather than none at all. That was sound
- * when disk was the primary source. It stopped being sound when the design system and
- * every marketplace node became ROWS: a deployed universe has NO nodes on disk, so rows
- * are not a supplement, they are the whole set.
- *
- * The result: a deploy starts every container at once, this read loses the race to the
- * engine, `[]` comes back indistinguishable from an empty universe, and the loader
- * reports a clean success with zero packages. Every node in every workflow then renders
- * as "in the marketplace as …", exactly as though it had been uninstalled, while all 46
- * rows sit untouched in the database. Nothing retried, because nothing knew anything had
- * failed. The caller had a retry and this function made sure it could never fire.
- *
- * So a failure THROWS. `loadManifests` already catches per source and records it, so one
- * dead source still cannot lose the other — the difference is that the failure is now
- * visible, and the boot can wait for the engine and try again.
+ * A failure here THROWS. It used to answer [] instead, which is indistinguishable from
+ * a universe that owns nothing, and on a deployed universe rows are the only node
+ * source, so a boot that lost the race to the engine silently served an empty catalog.
+ * The loader records a thrown source and carries on, so one dead source still cannot
+ * lose the other.
  */
 import type { ItemRow } from "./source.js";
 
