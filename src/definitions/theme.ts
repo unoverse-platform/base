@@ -36,7 +36,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // VALUES are each org's own — that's how two clients get different fonts/colors/spacing
 // from the same components, without re-copying the foundation.
 import { listOrgs, projectDir } from "./definitions.js";
-import { NODES_HOME, PLUGINS_DIR, RX_HOME } from "../paths.js";
+import { NODES_HOME, PLUGINS_DIR, RX_HOME, INSTALLED_HOME, databaseOnly } from "../paths.js";
 
 const RX = RX_HOME;
 export const DEFAULT_ORG = "default";
@@ -61,10 +61,33 @@ const DS_STYLES_CANDIDATES = [
   join(NODES_HOME, "marketplace", "definitions", "styles"),
   join(PLUGINS_DIR, "node_modules", "@unoverse-platform", "marketplace", "definitions", "styles"),
 ];
+/**
+ * WHAT THIS UNIVERSE WAS INSTALLED — the tier this function was missing.
+ *
+ * The design system is CHOSEN now, not shipped (MARKETPLACE.md §3), so on a deployed
+ * universe it is neither on disk nor in a bundle: it is rows, unpacked here. `definitions.ts`
+ * already ends its search on this tier for components and atoms, and its comment says it
+ * "mirrors theme.ts's styles fallback" — which was true when written and stopped being
+ * true when that tier was added there and not here.
+ *
+ * The cost was total and silent. A universe would install the design system, hold all 49
+ * rows, render components from them, and still resolve NO themes: `/dev/themes` answered
+ * `{"themes":[]}` and Studio sat on "loading theme from mcp…" for ever, because a screen
+ * with no tokens cannot draw. Installed, present, and unreachable.
+ */
+const INSTALLED_STYLES = join(INSTALLED_HOME, "rx", "marketplace", "styles");
+
 function foundationStyles(): string | null {
+  // Under the switch the authored tiers are skipped, so what a deployed universe would
+  // resolve is what a developer resolves. Same shape as `marketplaceDir`.
+  if (databaseOnly()) return existsSync(INSTALLED_STYLES) ? INSTALLED_STYLES : null;
   const rxDs = join(RX, "marketplace", "styles");
   if (existsSync(rxDs)) return rxDs; // on-disk marketplace wins (dev/local)
   for (const c of DS_STYLES_CANDIDATES) if (existsSync(c)) return c;
+  // SEARCHED LAST, so anything on disk still wins — the same precedence the node loader
+  // applies with [disk, rows]. On a deployed universe the tiers above are empty by design
+  // and this is the only one with anything in it.
+  if (existsSync(INSTALLED_STYLES)) return INSTALLED_STYLES;
   // Last: the copy the running HOST carries. Studio has the design system in its own
   // node_modules and no project-local tier will ever hold one (dsPackage.ts).
   const packaged = packagedDesignSystem();
