@@ -27,7 +27,7 @@ import { executorForKind, setManifestLookup } from "./executor/index.js";
 import { diskSource, rowsSource, type ManifestSource, type RawPackage } from "./source.js";
 import { fetchNodeRows } from "./rows.js";
 import { isPluginEnabled } from "../plugins/state.js";
-import { NODES_HOME } from "../paths.js";
+import { NODES_HOME, databaseOnly } from "../paths.js";
 import { boot } from "../boot.js";
 
 /** Marketplace name for a manifest package, so it shares one row with its code half. */
@@ -122,7 +122,13 @@ export async function loadManifests(source?: ManifestSource): Promise<LoadResult
   // one-off load) wins outright; otherwise DISK beats rows, because a manifest present
   // in the monorepo is being authored right now and must beat whatever was installed.
   // Same local-wins first-principle the node loader already applies to npm copies.
-  const sources: ManifestSource[] = source ? [source] : [diskSource(NODES_HOME), rowsSource(fetchNodeRows)];
+  // Under UNOVERSE_DATABASE_ONLY the disk half is dropped, so a developer sees the node
+  // set a deployed universe would have: whatever is installed, and nothing else.
+  const sources: ManifestSource[] = source
+    ? [source]
+    : databaseOnly()
+      ? [rowsSource(fetchNodeRows)]
+      : [diskSource(NODES_HOME), rowsSource(fetchNodeRows)];
 
   const packages: RawPackage[] = [];
   const seen = new Set<string>();

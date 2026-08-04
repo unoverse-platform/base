@@ -14,7 +14,19 @@ import * as fs from "fs";
 import * as path from "path";
 import crypto from "crypto";
 import matter from "gray-matter";
-import { PROMPT_BLOCKS_HOME, SKILLS_HOME } from "../paths.js";
+import { PROMPT_BLOCKS_HOME, SKILLS_HOME, INSTALLED_HOME, databaseOnly } from "../paths.js";
+
+/**
+ * The same two homes, HYDRATED FROM INSTALLED ROWS (items/hydrate.ts).
+ *
+ * Read AFTER the on-disk homes, never instead of them: a skill being edited in the
+ * monorepo must beat the database's copy, the same rule the definition resolver and the
+ * node loader both apply. A deployed universe has nothing in the on-disk homes, so these
+ * are the only ones with content — which is why `/prompt-blocks` answered with an empty
+ * list on a universe that had published blocks sitting in its database.
+ */
+const INSTALLED_BLOCKS = path.join(INSTALLED_HOME, "prompts", "blocks");
+const INSTALLED_SKILLS = path.join(INSTALLED_HOME, "skills");
 
 export interface PromptBlock {
   id: string;
@@ -62,8 +74,9 @@ export function clearPromptBlockCache(): void {
 export function loadPromptBlocks(): PromptBlock[] {
   if (cachedBlocks) return cachedBlocks;
 
-  if (!fs.existsSync(PROMPT_BLOCKS_HOME)) {
-    console.warn(`[unoverse:prompt-blocks] content dir not found: ${PROMPT_BLOCKS_HOME}`);
+  const homes = (databaseOnly() ? [INSTALLED_BLOCKS] : [PROMPT_BLOCKS_HOME, INSTALLED_BLOCKS]).filter((d) => fs.existsSync(d));
+  if (!homes.length) {
+    console.warn(`[unoverse:prompt-blocks] no content dir: neither ${PROMPT_BLOCKS_HOME} nor ${INSTALLED_BLOCKS}`);
     cachedBlocks = [];
     return cachedBlocks;
   }
@@ -93,10 +106,13 @@ export function loadPromptBlocks(): PromptBlock[] {
     }
   };
 
-  walk(PROMPT_BLOCKS_HOME);
-  cachedBlocks = blocks;
-  console.log(`[unoverse:prompt-blocks] loaded ${blocks.length} prompt blocks`);
-  return blocks;
+  // On-disk first, so an id present in both keeps the authored copy and the installed one
+  // is dropped rather than appended twice.
+  for (const home of homes) walk(home);
+  const seen = new Set<string>();
+  cachedBlocks = blocks.filter((b) => !seen.has(b.id) && seen.add(b.id));
+  console.log(`[unoverse:prompt-blocks] loaded ${cachedBlocks.length} prompt blocks`);
+  return cachedBlocks;
 }
 
 /** Parse a SKILL.md file into a structured skill plus content hash, or null if invalid. */
@@ -142,7 +158,20 @@ function parseSkillFile(filePath: string): ParsedSkill | null {
 
 /** One parsed skill by name, or null when the folder holds no readable SKILL.md. */
 export function loadParsedSkill(name: string): ParsedSkill | null {
-  const skillFilePath = path.join(SKILLS_HOME, name, "SKILL.md");
-  if (!fs.existsSync(skillFilePath)) return null;
-  return parseSkillFile(skillFilePath);
+  for (const home of databaseOnly() ? [INSTALLED_SKILLS] : [SKILLS_HOME, INSTALLED_SKILLS]) {
+    const skillFilePath = path.join(home, name, "SKILL.md");
+    if (fs.existsSync(skillFilePath)) return parseSkillFile(skillFilePath);
+  }
+  return null;
+}
+
+/** Every skill name this universe has, from both homes. The on-disk one wins a clash,
+ *  which is what `loadParsedSkill` does when it reads them back. */
+export function listSkillNames(): string[] {
+  const names = new Set<string>();
+  for (const home of databaseOnly() ? [INSTALLED_SKILLS] : [SKILLS_HOME, INSTALLED_SKILLS]) {
+    if (!fs.existsSync(home)) continue;
+    for (const e of fs.readdirSync(home, { withFileTypes: true })) if (e.isDirectory()) names.add(e.name);
+  }
+  return [...names].sort();
 }

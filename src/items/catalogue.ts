@@ -28,8 +28,8 @@ import * as path from "path";
 // an update and nobody notices until the marketplace looks permanently stale.
 import { fingerprintOf } from "./fingerprint.js";
 import { listDefinitions } from "../definitions/definitions.js";
-import { loadPromptBlocks, loadParsedSkill } from "./loaders.js";
-import { SKILLS_HOME, NODES_HOME, RX_HOME } from "../paths.js";
+import { loadPromptBlocks, loadParsedSkill, listSkillNames } from "./loaders.js";
+import { SKILLS_HOME, NODES_HOME, RX_HOME, databaseOnly } from "../paths.js";
 import { diskSource } from "../manifests/source.js";
 import { composeNode } from "../manifests/compose.js";
 
@@ -146,11 +146,12 @@ function designSystemItems(): CatalogueItem[] {
 }
 
 function skillItems(): CatalogueItem[] {
-  if (!fs.existsSync(SKILLS_HOME)) return [];
   const items: CatalogueItem[] = [];
-  for (const dir of fs.readdirSync(SKILLS_HOME, { withFileTypes: true })) {
-    if (!dir.isDirectory()) continue;
-    const skill = loadParsedSkill(dir.name);
+  // LISTED THE SAME WAY THEY ARE READ. This used to enumerate SKILLS_HOME with its own
+  // readdir, so the catalogue offered exactly the authored skills while `loadParsedSkill`
+  // could also resolve installed ones — a list and a loader disagreeing about what exists.
+  for (const name of listSkillNames()) {
+    const skill = loadParsedSkill(name);
     if (!skill) continue;
     items.push({
       kind: "skill",
@@ -186,6 +187,10 @@ function promptBlockItems(): CatalogueItem[] {
  *  data. A code node is not offered here, because taking one would mean taking code. */
 async function nodeItems(): Promise<CatalogueItem[]> {
   const items: CatalogueItem[] = [];
+  // A deployed universe has no node manifests on disk, and under the switch a developer's
+  // machine pretends it has none either. Without this the catalogue kept offering all
+  // seventy as "yours, on disk" while every reader had stopped seeing them.
+  if (databaseOnly()) return items;
   try {
     const packages = await diskSource(NODES_HOME).listPackages();
     for (const pkg of packages) {

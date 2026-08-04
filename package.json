@@ -1,6 +1,6 @@
 {
   "name": "@unoverse-platform/base",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "The Unoverse YAML runtime: node manifests, rx definitions, and the platform surface a node sees",
   "license": "MIT",
   "repository": {
@@ -27,13 +27,16 @@
   },
   "files": [
     "dist",
+    "src",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc && node scripts/copy-lint.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
-    "prepublishOnly": "npm run test && npm run build"
+    "prepublishOnly": "npm run test && npm run build",
+    "prepack": "node scripts/publish-fields.mjs apply",
+    "postpack": "node scripts/publish-fields.mjs restore"
   },
   "dependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",

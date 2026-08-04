@@ -115,6 +115,38 @@ export const NODES_HOME = paths.nodes;
 export const RX_HOME = paths.rx;
 export const SKILLS_HOME = paths.skills;
 export const PROMPT_BLOCKS_HOME = paths.promptBlocks;
+/**
+ * Where INSTALLED items are written so the loaders can read them (items/hydrate.ts).
+ *
+ * A SEPARATE ROOT, never inside `rx`. In the monorepo `RX_HOME` is somebody's authoring
+ * tree, and hydrating a database into it would overwrite work in progress. Keeping it
+ * apart is also what makes the precedence rule enforceable: the on-disk tiers are searched
+ * first and an installed row can only ever fill a gap, never replace what the platform
+ * ships.
+ *
+ * Rebuilt whole on every hydrate, so nothing here is worth backing up and editing it by
+ * hand achieves nothing.
+ */
+export const INSTALLED_HOME = process.env.UNOVERSE_INSTALLED_HOME?.trim() || path.join(HOME, ".installed");
+
+/**
+ * `UNOVERSE_DATABASE_ONLY=1` — behave like a deployed universe on a developer's machine.
+ *
+ * A server holds no rx, no prompts and no node manifests, so everything it serves comes
+ * from its database. In the monorepo those folders are full, they are searched first, and
+ * they win — which is correct for authoring and means the production path is never
+ * exercised until it is deployed. This turns the on-disk tiers off so the database is the
+ * only source, exactly as it is in production.
+ *
+ * A TEST SWITCH, NOT A MODE. It changes nothing about how anything is stored or resolved,
+ * only which tiers are consulted, so a bug found with it on is a real bug rather than an
+ * artefact of a second code path. It is read from the environment and never written to,
+ * and a deployed universe does not set it: there, the folders are empty anyway.
+ */
+export function databaseOnly(): boolean {
+  const v = process.env.UNOVERSE_DATABASE_ONLY?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
 export const PLUGINS_DIR = paths.plugins;
 export const PACKAGES_PATH = paths.packages;
 export const MARKETPLACE_PATH = paths.marketplace;

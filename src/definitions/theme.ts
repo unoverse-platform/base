@@ -16,6 +16,7 @@ import { readdirSync, existsSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { readDefCached, defPath, isDefFile, defName, dirSignature, cachedBySignature } from "./fsCache.js";
+import { packagedDesignSystem } from "./dsPackage.js";
 // Icon glyphs are sourced from a pack HERE (control plane), never in the SDK bundle:
 // rx/ lists semantic→lucide names; we resolve each to served `theme.icons` data.
 import { icons as lucideIcons } from "lucide";
@@ -64,6 +65,10 @@ function foundationStyles(): string | null {
   const rxDs = join(RX, "marketplace", "styles");
   if (existsSync(rxDs)) return rxDs; // on-disk marketplace wins (dev/local)
   for (const c of DS_STYLES_CANDIDATES) if (existsSync(c)) return c;
+  // Last: the copy the running HOST carries. Studio has the design system in its own
+  // node_modules and no project-local tier will ever hold one (dsPackage.ts).
+  const packaged = packagedDesignSystem();
+  if (packaged && existsSync(join(packaged, "styles"))) return join(packaged, "styles");
   return null;
 }
 

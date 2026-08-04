@@ -9,8 +9,9 @@
 import { readdirSync, existsSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { packagedDesignSystem } from "./dsPackage.js";
 import { readDefCached, defPath, isDefFile, defName, dirSignature, cachedBySignature } from "./fsCache.js";
-import { NODES_HOME, PLUGINS_DIR, RX_HOME } from "../paths.js";
+import { NODES_HOME, PLUGINS_DIR, RX_HOME, INSTALLED_HOME, databaseOnly } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // server/src -> apps/unoverse
@@ -34,6 +35,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const RX = RX_HOME;
 const ORGS_ROOT = join(RX, "orgs");
 
+/**
+ * The rx tree HYDRATED FROM INSTALLED ROWS (items/hydrate.ts), laid out identically.
+ *
+ * SEARCHED LAST, ALWAYS. What the platform ships on disk wins over anything installed:
+ * a developer editing a component in the monorepo must see their own file, never a
+ * database's copy of an older one. That is the same precedence the node loader applies
+ * with [disk, rows], and putting the installed tree in its own root is what makes the
+ * rule structural rather than a comparison somebody has to remember to write.
+ *
+ * On a deployed universe the disk tiers are empty by design, so this is the only tier
+ * with anything in it and the ordering never comes up.
+ */
+const INSTALLED_RX = join(INSTALLED_HOME, "rx");
+
 /** The shared homes for the universal kinds — the marketplace.
  *
  * The marketplace ships as an INSTALLED package (@unoverse-platform/marketplace),
@@ -50,12 +65,24 @@ const DS_BUNDLE_CANDIDATES = [
 ];
 function marketplaceDir(kind: "components" | "atoms"): string {
   const onDisk = join(MARKETPLACE, kind);
+  // Under the switch the authored tiers are skipped, so what a deployed universe would
+  // resolve is what a developer resolves.
+  if (databaseOnly()) {
+    const installed = join(INSTALLED_RX, "marketplace", kind);
+    return existsSync(installed) ? installed : onDisk;
+  }
   if (existsSync(onDisk)) return onDisk;
   for (const base of DS_BUNDLE_CANDIDATES) {
     const p = join(base, kind);
     if (existsSync(p)) return p;
   }
-  return onDisk; // neither present → the disk path (may be empty); nothing to resolve
+  // Last: what this universe was PUBLISHED. A deployed universe holds no rx and no
+  // bundle, so this is where its design system actually lives.
+  const installed = join(INSTALLED_RX, "marketplace", kind);
+  if (existsSync(installed)) return installed;
+  const packaged = packagedDesignSystem();
+  if (packaged && existsSync(join(packaged, kind))) return join(packaged, kind);
+  return onDisk; // none present → the disk path (may be empty); nothing to resolve
 }
 const SHARED_DIR = {
   get component() {
@@ -74,8 +101,16 @@ const RESERVED_RX = new Set(["marketplace", "_schema"]);
  *  at the rx root (`rx/<name>` — the target) or under the legacy `rx/orgs/<name>`. Flat
  *  wins. A project folder carries at least one of styles/templates/components. */
 export function projectDir(name: string): string {
+  const installedProject = join(INSTALLED_RX, name);
+  if (databaseOnly()) return installedProject;
   const flat = join(RX, name);
-  return existsSync(flat) ? flat : join(ORGS_ROOT, name);
+  if (existsSync(flat)) return flat;
+  const legacy = join(ORGS_ROOT, name);
+  if (existsSync(legacy)) return legacy;
+  // Published, not authored here. Checked after both on-disk homes so a project being
+  // edited in the monorepo is never shadowed by the database's copy of it.
+  const installed = join(INSTALLED_RX, name);
+  return existsSync(installed) ? installed : legacy;
 }
 
 /** The client projects, sorted: flat at the rx root (the target) PLUS any still under the
@@ -85,15 +120,23 @@ export function projectDir(name: string): string {
 export function listOrgs(): string[] {
   const isProject = (dir: string) =>
     existsSync(join(dir, "styles")) || existsSync(join(dir, "templates")) || existsSync(join(dir, "components"));
-  const flat = existsSync(RX)
+  const flat = existsSync(RX) && !databaseOnly()
     ? readdirSync(RX, { withFileTypes: true })
         .filter((e) => e.isDirectory() && !RESERVED_RX.has(e.name) && isProject(join(RX, e.name)))
         .map((e) => e.name)
     : [];
-  const legacy = existsSync(ORGS_ROOT)
+  const legacy = existsSync(ORGS_ROOT) && !databaseOnly()
     ? readdirSync(ORGS_ROOT, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
     : [];
-  return [...new Set([...flat, ...legacy])].sort();
+  // Projects this universe was PUBLISHED but does not author. On a deployed universe
+  // these are the only ones there are. A name in both is listed once, and `projectDir`
+  // decides which home wins — on disk, every time.
+  const installed = existsSync(INSTALLED_RX)
+    ? readdirSync(INSTALLED_RX, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !RESERVED_RX.has(e.name) && isProject(join(INSTALLED_RX, e.name)))
+        .map((e) => e.name)
+    : [];
+  return [...new Set([...flat, ...legacy, ...installed])].sort();
 }
 
 /** Definition roots for guards/tooling sweeps: the shared tree (components/atoms in
