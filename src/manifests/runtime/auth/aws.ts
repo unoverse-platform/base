@@ -153,7 +153,13 @@ export async function presignAwsUrl(
       path: parsed.pathname,
       query,
       method: "GET",
-      headers: { host: parsed.host },
+      // UNSIGNED-PAYLOAD, declared as the sha256 header so the signer hoists it into the
+      // query and signs THAT. Without it the signer hashes the (absent) body to the
+      // empty-string sha, while S3 verifies a query-auth GET against UNSIGNED-PAYLOAD —
+      // a SignatureDoesNotMatch whose error mentions neither body nor payload. This is
+      // what @aws-sdk/s3-request-presigner does; proved against live S3 rather than added
+      // as a dependency for one header.
+      headers: { host: parsed.host, "x-amz-content-sha256": "UNSIGNED-PAYLOAD" },
     }),
     { expiresIn },
   );

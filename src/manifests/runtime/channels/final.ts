@@ -21,7 +21,7 @@
 import type { ComposedNode } from "../../compose.js";
 import type { RunContext } from "../context.js";
 import { evaluate, render } from "../templating.js";
-import { sendRequest, buildRequest } from "../http/request.js";
+import { sendRequest, buildRequest, performPresign } from "../http/request.js";
 import { readSse, readSettled, assertOk } from "../http/response.js";
 import { runDuplexSession } from "../duplex/session.js";
 import type { AudioLane } from "../duplex/audioLane.js";
@@ -75,6 +75,10 @@ export async function runFinal(
     const value = call.value ? await evaluate(call.value, ctx as unknown as Record<string, unknown>) : undefined;
     return settle(await performLoop(call.loop, ctx.scope?.executionId, String(render(call.key, ctx)), value, store?.loop));
   }
+
+  // Presign: no request at all — the node settles on the minted urls, always a list.
+  // S3Files ends on one when links are asked for: list, then mint a link per object found.
+  if (call.presign) return settle(await performPresign(node, call, ctx));
 
   // Chunked: many requests over one collection, one summary reply.
   if (call.chunk) return settle(await sendChunked(node, call, ctx, node.type));

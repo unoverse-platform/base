@@ -371,17 +371,35 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
   const attempts = Math.max(1, retry?.attempts ?? 1);
   const retryOn: number[] = retry?.on ?? [];
 
+  /**
+   * ONE LINE OUT, ONE LINE BACK. A remote node's whole life otherwise happens between
+   * "Executing node X" and its verdict, and every minute of that silence gets read as a
+   * hang — a 60-second upload, a slow vendor, a poll loop all look identical from the
+   * engine log. The QUERY IS CUT, and not for brevity: a presigned url carries its
+   * signature there, and a list call carries its filters. Poll attempts are quiet here
+   * because the poll loop narrates itself, by status change rather than by request.
+   */
+  const target = url.split("?")[0] + (url.includes("?") ? "?…" : "");
+  const quiet = /\(poll \d/.test(label);
+  const started = Date.now();
+  if (!quiet) console.log(`[manifests] ${label}: ${init.method} ${target}`);
 
   let res!: Response;
   for (let attempt = 1; ; attempt++) {
     res = await fetchWithTimeout(url, init, requestSpec?.timeoutMs, label);
-    if (res.ok) return res;
+    if (res.ok) {
+      if (!quiet) console.log(`[manifests] ${label}: ${res.status} in ${Date.now() - started}ms`);
+      return res;
+    }
 
     // Statuses the manifest declares as an ANSWER rather than a failure (`okOn: [404]`),
     // so a projection can interpret them — an existence check, a lookup by an id the
     // model may have mistyped. Without this, the projection's graceful miss-handling is
     // unreachable: the transport throws first and the caller sees an empty result.
-    if (Array.isArray(requestSpec?.okOn) && requestSpec.okOn.includes(res.status)) return res;
+    if (Array.isArray(requestSpec?.okOn) && requestSpec.okOn.includes(res.status)) {
+      if (!quiet) console.log(`[manifests] ${label}: ${res.status} (declared ok) in ${Date.now() - started}ms`);
+      return res;
+    }
 
     // A minted token can be revoked or expire early, and the vendor says so with a 401.
     // Refresh ONCE and retry, exactly as the retired client did. Guarded by !forceReauth so
@@ -430,6 +448,40 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
  *   - A call SKIPPED by `when` leaves no key behind, so "did it happen?" is `!!calls.x`
  *     rather than a sentinel nobody would remember to check.
  */
+/**
+ * A PRESIGN entry makes no request at all: it computes credential-carrying urls from the
+ * credentials and the clock. Shared by `runCalls` and `runFinal`, because a presign is legal
+ * anywhere in the list — S3Files ends on one (list, then mint a link per object found), and
+ * before `runFinal` knew this shape, that last entry fell through to `sendRequest` with no
+ * `url` and failed as "the request url resolved to undefined".
+ *
+ * ALWAYS A LIST, even for one URL, so the events table never cares how many there were.
+ */
+export async function performPresign(node: ComposedNode, call: any, scoped: RunContext): Promise<string[]> {
+  const p = call.presign;
+  const items = (await evaluate(p.for, scoped as unknown as Record<string, unknown>)) as unknown[];
+  const creds = (scoped.credentials?.awsCredential ?? {}) as Record<string, string>;
+  const signing: AwsSigning = {
+    region: String(p.region ?? creds.region ?? ""),
+    service: String(p.service ?? "s3"),
+    accessKeyId: String(creds.accessKeyId ?? ""),
+    secretAccessKey: String(creds.secretAccessKey ?? ""),
+    sessionToken: creds.sessionToken || undefined,
+  };
+  const expiresIn = Number(await evaluate(String(p.expiresIn ?? "return 3600"), scoped as unknown as Record<string, unknown>)) || 3600;
+
+  const urls: string[] = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    // `item` is in scope, so the manifest says how ONE url is built and this repeats it.
+    const target = String(await evaluate(p.url, { ...scoped, item } as unknown as Record<string, unknown>));
+    // ALWAYS credential-carrying: a presigned url IS authority, so it can never ride
+    // on the unauthenticated wildcard.
+    assertAllowedHost(target, node.allowedHosts, node.type, true);
+    urls.push(await presignAwsUrl(target, signing, expiresIn));
+  }
+  return urls;
+}
+
 export async function runCalls(
   node: ComposedNode,
   calls: any[],
@@ -510,28 +562,7 @@ export async function runCalls(
      * cared how many there were.
      */
     if (call.presign) {
-      const p = call.presign;
-      const items = (await evaluate(p.for, scoped as unknown as Record<string, unknown>)) as unknown[];
-      const creds = (ctx.credentials?.awsCredential ?? {}) as Record<string, string>;
-      const signing: AwsSigning = {
-        region: String(p.region ?? creds.region ?? ""),
-        service: String(p.service ?? "s3"),
-        accessKeyId: String(creds.accessKeyId ?? ""),
-        secretAccessKey: String(creds.secretAccessKey ?? ""),
-        sessionToken: creds.sessionToken || undefined,
-      };
-      const expiresIn = Number(await evaluate(String(p.expiresIn ?? "return 3600"), scoped as unknown as Record<string, unknown>)) || 3600;
-
-      const urls: string[] = [];
-      for (const item of Array.isArray(items) ? items : []) {
-        // `item` is in scope, so the manifest says how ONE url is built and this repeats it.
-        const target = String(await evaluate(p.url, { ...scoped, item } as unknown as Record<string, unknown>));
-        // ALWAYS credential-carrying: a presigned url IS authority, so it can never ride
-        // on the unauthenticated wildcard.
-        assertAllowedHost(target, node.allowedHosts, node.type, true);
-        urls.push(await presignAwsUrl(target, signing, expiresIn));
-      }
-
+      const urls = await performPresign(node, call, scoped);
       results[call.name] = urls;
       last = urls;
       continue;

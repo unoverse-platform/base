@@ -126,6 +126,21 @@ export async function fetchPolled(
   const interval = Math.min(await dial(p.intervalMs, 2000), MAX_INTERVAL_MS);
   const attempts = Math.min(await dial(p.maxAttempts, 90), HARD_POLL_CAP);
 
+  /**
+   * THE WAIT NARRATES ITSELF — by STATUS CHANGE, with a heartbeat, never per request.
+   * A job is minutes of silence in the engine log otherwise, and silence gets read as a
+   * hang. Per-attempt logging is the other failure: 300 lines of "still RUNNING" bury the
+   * one line that mattered. The query is cut from the url for the same reason it is cut in
+   * sendRequest: signatures and filters live there.
+   */
+  const startedAt = Date.now();
+  const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
+  const heartbeat = Math.max(1, Math.round(30_000 / interval));
+  let lastStatus: string | undefined;
+  console.log(
+    `[manifests] ${label}: job started — polling ${url.split("?")[0]} every ${Math.round(interval / 1000)}s (up to ${attempts} attempts)`,
+  );
+
   for (let attempt = 1; attempt <= attempts; attempt++) {
     await new Promise((r) => setTimeout(r, interval));
 
@@ -133,7 +148,15 @@ export async function fetchPolled(
     const payload = await readSettled(res, call.transport, call.encoding);
     await assertOk(node, call, payload, `${label} (poll ${attempt}/${attempts})`);
 
-    if (await settled(payload, `poll ${attempt}`)) return payload;
+    const status = typeof payload?.status === "string" ? payload.status : undefined;
+    if (status !== lastStatus || attempt % heartbeat === 0)
+      console.log(`[manifests] ${label}: poll ${attempt}/${attempts} — ${status ?? "(no status field)"} after ${elapsed()}s`);
+    lastStatus = status;
+
+    if (await settled(payload, `poll ${attempt}`)) {
+      console.log(`[manifests] ${label}: job finished after ${attempt} polls (${elapsed()}s)`);
+      return payload;
+    }
   }
 
   // Timing out is a real outcome, and the message says how long we actually waited rather
