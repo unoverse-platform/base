@@ -102,9 +102,13 @@ function designSystemItems(): CatalogueItem[] {
   for (const kind of ["component", "atom"] as const) {
     for (const d of listDefinitions(kind) as Array<Record<string, any>>) {
       if (d.org) continue;
+      // An atom is addressed by its FILENAME (`ref: outline-button` loads
+      // outline-button.yaml), while `name:` is display copy (OutlineButton). Cataloguing
+      // atoms under the display name installed rows nothing could resolve: the hydrated
+      // file took the row's name and every filename-keyed Ref missed it, silently.
       items.push({
         kind,
-        name: d.name,
+        name: kind === "atom" && (d as any).file ? String((d as any).file).replace(/\.(yaml|json)$/, "") : d.name,
         fingerprint: fingerprintOf(d),
         bundle: DESIGN_SYSTEM,
         title: d.title ?? d.name,

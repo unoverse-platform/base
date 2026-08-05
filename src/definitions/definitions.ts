@@ -190,6 +190,8 @@ export interface UnoverseDefinition {
   unoverse: string;
   kind: "component" | "template" | "atom";
   name: string;
+  /** Source basename for FILE definitions (atoms) — the identity refs resolve by. */
+  file?: string;
   /** The client org it belongs to (server-injected from its folder, never
    *  hand-written) — also names its theme (`<org>/light`). Design-system components
    *  and atoms are universal and carry no org; an ORG component (the client's own
@@ -540,7 +542,10 @@ export function listDefinitions(kind: "component" | "template" | "atom", org?: s
       try {
         if (e.isFile() && isDefFile(e.name)) {
           const raw = readDefCached<UnoverseDefinition>(join(dir, e.name));
-          out.push(o ? { ...raw, org: o } : raw);
+          // The FILENAME travels: refs address a file atom by its basename, so the
+          // catalogue must name it the same way or an installed atom is unreachable.
+          const withFile = { ...raw, file: e.name } as UnoverseDefinition;
+          out.push(o ? { ...withFile, org: o } : withFile);
         } else if (e.isDirectory()) {
           const d = loadDefinition(o ? `${o}/${e.name}` : e.name, kind); // composes the folder ($include + refs)
           if (d) out.push(d);
