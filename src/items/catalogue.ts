@@ -28,7 +28,7 @@ import * as path from "path";
 // an update and nobody notices until the marketplace looks permanently stale.
 import { fingerprintOf } from "./fingerprint.js";
 import { listDefinitions } from "../definitions/definitions.js";
-import { loadPromptBlocks, loadParsedSkill, listSkillNames } from "./loaders.js";
+import { loadAuthoredPromptBlocks, loadParsedSkill, listAuthoredSkillNames } from "./loaders.js";
 import { SKILLS_HOME, NODES_HOME, RX_HOME, databaseOnly } from "../paths.js";
 import { diskSource } from "../manifests/source.js";
 import { composeNode } from "../manifests/compose.js";
@@ -100,6 +100,12 @@ function designSystemItems(): CatalogueItem[] {
   // Marketplace tier only. An org's own components (rx/bpp, rx/sab) are theirs, never
   // ours to publish, so anything carrying an org is excluded here.
   for (const kind of ["component", "atom"] as const) {
+    // The catalogue offers AUTHORED work only — the styles section's rule, applied to
+    // every kind. The serving path may fall back to the npm bundle or the installed
+    // cache so screens can render, but offering THOSE back as authored branded every
+    // installed item "yours, on disk" the moment it was installed or the image carried
+    // the bundle. Authored means the monorepo's rx tier, and nothing else.
+    if (!fs.existsSync(path.join(RX_HOME, "marketplace", kind === "component" ? "components" : "atoms"))) continue;
     for (const d of listDefinitions(kind) as Array<Record<string, any>>) {
       if (d.org) continue;
       // An atom is addressed by its FILENAME (`ref: outline-button` loads
@@ -154,7 +160,7 @@ function skillItems(): CatalogueItem[] {
   // LISTED THE SAME WAY THEY ARE READ. This used to enumerate SKILLS_HOME with its own
   // readdir, so the catalogue offered exactly the authored skills while `loadParsedSkill`
   // could also resolve installed ones — a list and a loader disagreeing about what exists.
-  for (const name of listSkillNames()) {
+  for (const name of listAuthoredSkillNames()) {
     const skill = loadParsedSkill(name);
     if (!skill) continue;
     items.push({
@@ -176,7 +182,7 @@ function skillItems(): CatalogueItem[] {
 }
 
 function promptBlockItems(): CatalogueItem[] {
-  return loadPromptBlocks().map((b) => ({
+  return loadAuthoredPromptBlocks().map((b) => ({
     kind: "prompt-block" as const,
     name: b.id,
     fingerprint: fingerprintOf(b),

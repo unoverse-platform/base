@@ -303,7 +303,11 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
   await primeTemplating();
   const built: any = await buildRequest({ request: requestSpec }, ctx, forceReauth);
   const { url, init, rawBody } = built;
-  if (init.method !== "GET") {
+  // Nor HEAD: the fetch spec forbids a body on either, and undici enforces it. A bodyless
+  // POST still sends "{}" below (resolveBody defaults the absent body to an object), which
+  // some vendors require — but on HEAD that default became a body on a request that cannot
+  // carry one, and S3FileContent's metadata HEAD was the first call in the fleet to find out.
+  if (init.method !== "GET" && init.method !== "HEAD") {
     const resolved = await resolveBody(rawBody, built.scoped ?? ctx);
     /**
      * RAW BYTES, not JSON. Storing a file means PUTting the file, not a JSON document that
@@ -386,7 +390,25 @@ export async function sendRequest(node: ComposedNode, requestSpec: any, ctx: Run
 
   let res!: Response;
   for (let attempt = 1; ; attempt++) {
-    res = await fetchWithTimeout(url, init, requestSpec?.timeoutMs, label);
+    /**
+     * A HEARTBEAT WHILE THE VENDOR THINKS. A non-streaming model call can be minutes of
+     * legitimate silence (an Opus reading a whole document), and after the poll loop
+     * learned to narrate its wait, the one remaining silence was this await. Every 30s,
+     * with the bound, so a reader can tell "slow vendor, still inside its budget" from
+     * "hung" without knowing the manifest.
+     */
+    const bound = Number(requestSpec?.timeoutMs) || 120000;
+    const waiter = quiet
+      ? null
+      : setInterval(() => {
+          console.log(`[manifests] ${label}: still waiting on the vendor — ${Math.round((Date.now() - started) / 1000)}s elapsed (bound ${Math.round(bound / 1000)}s)`);
+        }, 30_000);
+    waiter?.unref?.();
+    try {
+      res = await fetchWithTimeout(url, init, requestSpec?.timeoutMs, label);
+    } finally {
+      if (waiter) clearInterval(waiter);
+    }
     if (res.ok) {
       if (!quiet) console.log(`[manifests] ${label}: ${res.status} in ${Date.now() - started}ms`);
       return res;

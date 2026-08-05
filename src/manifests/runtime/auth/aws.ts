@@ -55,6 +55,19 @@ export interface AwsSigning {
  * them are settled. Signing early would produce a valid-looking Authorization header for a
  * request that was never sent.
  */
+/**
+ * AWS-CANONICAL PATH ENCODING, the residue encodeURIComponent leaves behind.
+ *
+ * `encodeURIComponent` deliberately skips `!'()*` — legal in a URL path — but SigV4's
+ * canonical URI requires every byte outside ALPHA/DIGIT/`-._~` percent-encoded. A key like
+ * `report (final).pdf` therefore signs one string while S3 canonicalises another, and the
+ * answer is a bare 403 that a HEAD cannot even explain (no body). Encoding these five here
+ * changes nothing for keys without them and makes the signature agree for keys with them —
+ * S3 resolves `%28` and `(` to the same object either way.
+ */
+const awsCanonicalPath = (pathname: string): string =>
+  pathname.replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+
 export async function signAwsRequest(
   url: string,
   method: string,
@@ -96,7 +109,7 @@ export async function signAwsRequest(
       protocol: parsed.protocol,
       hostname: parsed.hostname,
       port: parsed.port ? Number(parsed.port) : undefined,
-      path: parsed.pathname,
+      path: awsCanonicalPath(parsed.pathname),
       query,
       method: method.toUpperCase(),
       // `host` MUST be present and MUST match what is dialled: it is a signed header, and a
@@ -150,7 +163,7 @@ export async function presignAwsUrl(
       protocol: parsed.protocol,
       hostname: parsed.hostname,
       port: parsed.port ? Number(parsed.port) : undefined,
-      path: parsed.pathname,
+      path: awsCanonicalPath(parsed.pathname),
       query,
       method: "GET",
       // UNSIGNED-PAYLOAD, declared as the sha256 header so the signer hoists it into the

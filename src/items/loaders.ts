@@ -81,6 +81,13 @@ export function loadPromptBlocks(): PromptBlock[] {
     return cachedBlocks;
   }
 
+  cachedBlocks = readBlocksFrom(homes);
+  console.log(`[unoverse:prompt-blocks] loaded ${cachedBlocks.length} prompt blocks`);
+  return cachedBlocks;
+}
+
+/** Walk block homes in precedence order; an id present in two keeps the first copy. */
+function readBlocksFrom(homes: string[]): PromptBlock[] {
   const blocks: PromptBlock[] = [];
   const walk = (dir: string, category?: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -105,14 +112,9 @@ export function loadPromptBlocks(): PromptBlock[] {
       }
     }
   };
-
-  // On-disk first, so an id present in both keeps the authored copy and the installed one
-  // is dropped rather than appended twice.
-  for (const home of homes) walk(home);
+  for (const home of homes) if (fs.existsSync(home)) walk(home);
   const seen = new Set<string>();
-  cachedBlocks = blocks.filter((b) => !seen.has(b.id) && seen.add(b.id));
-  console.log(`[unoverse:prompt-blocks] loaded ${cachedBlocks.length} prompt blocks`);
-  return cachedBlocks;
+  return blocks.filter((b) => !seen.has(b.id) && seen.add(b.id));
 }
 
 /** Parse a SKILL.md file into a structured skill plus content hash, or null if invalid. */
@@ -167,6 +169,20 @@ export function loadParsedSkill(name: string): ParsedSkill | null {
 
 /** Every skill name this universe has, from both homes. The on-disk one wins a clash,
  *  which is what `loadParsedSkill` does when it reads them back. */
+/** Authored blocks only — what the CATALOGUE may offer. The installed tier is the
+ *  database's own cache: reading it back into the catalogue branded every installed
+ *  block "yours, on disk" the moment hydration ran. Serving still reads both. */
+export function loadAuthoredPromptBlocks(): PromptBlock[] {
+  if (!fs.existsSync(PROMPT_BLOCKS_HOME)) return [];
+  return readBlocksFrom([PROMPT_BLOCKS_HOME]);
+}
+
+/** Authored skills only — same rule as blocks: the catalogue never reads the cache. */
+export function listAuthoredSkillNames(): string[] {
+  if (!fs.existsSync(SKILLS_HOME)) return [];
+  return fs.readdirSync(SKILLS_HOME, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+}
+
 export function listSkillNames(): string[] {
   const names = new Set<string>();
   for (const home of databaseOnly() ? [INSTALLED_SKILLS] : [SKILLS_HOME, INSTALLED_SKILLS]) {
