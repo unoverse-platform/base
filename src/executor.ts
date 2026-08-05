@@ -70,6 +70,13 @@ export async function* executeCallbackNode(nodeDef: NodeDefinition, inputs: any,
   }
 
   if (!executor.initializeState || !executor.handleEvent) {
+    // A PromiseNode on the stream path: design-system nodes ride the callback-actor
+    // lifecycle (template uiComponent) but their universal executor is a PromiseNode
+    // that outputs at the end (UNOVERSE_NODE_RUNTIME.md). One output, then done.
+    if (typeof (executor as any).execute === "function") {
+      yield await executePromiseNode(nodeDef, inputs, config, context);
+      return;
+    }
     throw new Error(`Node ${nodeDef.type} is a CallbackNode but missing initializeState or handleEvent`);
   }
 
