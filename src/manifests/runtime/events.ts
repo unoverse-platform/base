@@ -102,7 +102,14 @@ export function makeEmitter(node: ComposedNode, onEmit: (e: Emission) => void, b
       const row = rows[i];
       if ((row.from ?? "response") !== source) continue;
       // `match` applies to streaming rows only; a settling row has no event type to match.
-      if (match !== undefined && row.match !== undefined && row.match !== match) continue;
+      // A row may name SEVERAL event types (a list) when one connector accumulates from
+      // more than one wire event — e.g. reasoning summary deltas plus the part-done
+      // marker that separates summary sections. The value expression reads
+      // `response.type` to tell them apart.
+      if (match !== undefined && row.match !== undefined) {
+        const hit = Array.isArray(row.match) ? row.match.includes(match) : row.match === match;
+        if (!hit) continue;
+      }
       if (row.when && !(await evaluate(row.when, scope))) continue;
       deliver(row, i, await evaluate(row.value, scope));
       // First match wins per event, which is what keeps a chatty API readable.

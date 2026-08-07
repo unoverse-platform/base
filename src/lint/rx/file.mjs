@@ -137,8 +137,12 @@ function lintFile(file) {
           for (const [state, list] of Object.entries(json.preview)) {
             if (!states.has(state))
               report("error", file, `preview."${state}". No states/${state}.json or layouts/${state}.json in this template (docs/design/07)`);
+            // An OBJECT entry is authored TEMPLATE-STATE mock data (what the workflow
+            // would have echoed — comments, a discriminant, an anchor), merged verbatim
+            // when the state's pill is picked. Only the two shapes; anything else errors.
+            if (list && typeof list === "object" && !Array.isArray(list)) continue;
             if (!Array.isArray(list) || list.some((c) => typeof c !== "string")) {
-              report("error", file, `preview."${state}" must be an array of component names`);
+              report("error", file, `preview."${state}" must be an array of component names, or an object of template-state mock data`);
               continue;
             }
             for (const c of list)
