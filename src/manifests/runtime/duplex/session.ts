@@ -58,7 +58,7 @@ import { makeAudioBuffer, resamplePcm16, CLIENT_RATE, type AudioLane } from "./a
 const IDLE_TIMEOUT_MS = 30_000;
 const MAX_SESSION_MS = 30 * 60_000;
 
-import { offerDiscovered, type ToolBridge } from "../tools/toolloop.js";
+import { offerDiscovered, parseMaybeJson, type ToolBridge } from "../tools/toolloop.js";
 
 
 /** Resolve one manifest message against the run scope, with `extra` layered on top. */
@@ -366,7 +366,10 @@ export async function runDuplexSession(opts: {
                 // the assistant say it could not do the thing, not drop the conversation.
                 output = `Tool "${name}" failed: ${err?.message ?? err}`;
               }
-              await emitter.tool({ name, args: rawArgs, output });
+              // PARSED for the connector lane only (readable mcpResult, same as the HTTP
+              // loop); the model message two lines down keeps the raw `output` string —
+              // the vendor wire requires text.
+              await emitter.tool({ name, args: parseMaybeJson(rawArgs), output: parseMaybeJson(output) });
               // A LIST, because a vendor may need more than one message: OpenAI adds the item and
               // then asks for a response, and without the second the model never speaks the result.
               const back = await message(exchange.result, ctx, { call: { id, name, output } });

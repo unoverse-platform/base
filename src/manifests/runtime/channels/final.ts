@@ -33,6 +33,7 @@ import { performLoop } from "../loops/loop.js";
 import { performDoc } from "../docstore/index.js";
 import type { Emitter } from "../events.js";
 import type { ToolBridge } from "../tools/toolloop.js";
+import { makeUsageCollector } from "../usage.js";
 
 export async function runFinal(
   node: ComposedNode,
@@ -133,6 +134,11 @@ export async function runFinal(
   if (transport === "json" || transport === "text") {
     const payload = await readSettled(res, transport, call.encoding);
     await assertOk(node, call, payload, node.type);
+    // Token usage: a settled vendor body carries it inline (Chat Completions puts it
+    // top-level). One payload, so see + save in one breath.
+    const usage = makeUsageCollector(node, ctx);
+    usage.see(payload);
+    usage.save();
     // Named BEFORE emitting, so a row reading calls.<name> sees it.
     //
     // Settling only. A streaming call has no single reply to name: it is a sequence, and
@@ -145,10 +151,13 @@ export async function runFinal(
   }
 
   if (transport === "sse") {
+    const usage = makeUsageCollector(node, ctx);
     await readSse(res, call.terminator, async (payload) => {
       await assertOk(node, call, payload, node.type);
+      usage.see(payload);
       await emitter.response(payload, payload.type);
     });
+    usage.save();
     return res.status;
   }
 

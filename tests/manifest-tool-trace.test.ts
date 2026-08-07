@@ -15,6 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { parseMaybeJson } from "../src/manifests/runtime/tools/toolloop.js";
 
 const SRC = readFileSync(new URL("../src/manifests/runtime/tools/toolloop.ts", import.meta.url), "utf8");
 const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
@@ -69,7 +70,17 @@ test("the recorded result is an OBJECT, not an escaped string", () => {
    * Best-effort: a tool that legitimately returns prose must keep its string rather than
    * being dropped or mangled.
    */
-  assert.ok(/JSON\.parse\(result\)/.test(CODE), "the tool result is stored without being parsed");
+  /**
+   * CALLED, not pattern-matched. This asserted `/parsed = result/` against the source and
+   * broke when the inline try/catch became the exported `parseMaybeJson`. The behaviour was
+   * unchanged and strictly better, but the guard failed a release and the obvious way out
+   * was to loosen it, which is how a real regression gets waved through one day.
+   */
+  assert.deepEqual(parseMaybeJson('[{"universal_id":"abc"}]'), [{ universal_id: "abc" }], "JSON is parsed into an object");
+  assert.equal(parseMaybeJson("just prose, not JSON"), "just prose, not JSON", "a non-JSON result is not preserved as-is");
+  assert.equal(parseMaybeJson(""), "", "an empty result survives rather than throwing");
+  assert.deepEqual(parseMaybeJson({ already: "an object" }), { already: "an object" }, "a non-string is returned untouched");
+
+  // And the trace posts that value, rather than the raw string beside it.
   assert.ok(/result: parsed/.test(CODE), "the trace still posts the raw string");
-  assert.ok(/parsed = result/.test(CODE), "a non-JSON result is not preserved as-is");
 });

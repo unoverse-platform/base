@@ -24,6 +24,7 @@ import { evaluate, render } from "../templating.js";
 import { sendRequest } from "../http/request.js";
 import { readSse, assertOk } from "../http/response.js";
 import type { Emitter } from "../events.js";
+import { makeUsageCollector } from "../usage.js";
 
 /** How the loop reaches MCP tools. Injected, so the loop never touches a platform global. */
 export interface ToolBridge {
@@ -41,6 +42,23 @@ export interface ToolBridge {
   absorb(toolName: string, resultContent: string): Promise<{ content: string; minted: any[] }>;
   /** Does this exchange end the turn? Depends on which tools were WIRED. */
   endsTurn(calls: { name: string; resultContent: string }[]): boolean;
+}
+
+/**
+ * Best-effort parse of a tool result. MCP carries results as TEXT, so `bridge.call`
+ * hands back a string even when the tool returned structured data. Anywhere a HUMAN
+ * or a template reads the result (the execution trace, the `from: tool` connector
+ * emissions), the parsed object is the readable form; a tool that legitimately
+ * returns prose keeps its string. The MODEL-facing lanes (toolExchange /
+ * function_call_output) must stay strings per the vendor wire — never feed them this.
+ */
+export function parseMaybeJson(result: unknown): unknown {
+  if (typeof result !== "string") return result;
+  try {
+    return JSON.parse(result);
+  } catch {
+    return result;
+  }
 }
 
 /**
@@ -74,14 +92,7 @@ function recordToolTrace(
    * can read — which defeats the point of recording it. The parse is best-effort: a tool
    * that legitimately returns prose keeps its string.
    */
-  let parsed: unknown = result;
-  if (typeof result === "string") {
-    try {
-      parsed = JSON.parse(result);
-    } catch {
-      parsed = result;
-    }
-  }
+  const parsed = parseMaybeJson(result);
 
   const endTime = Date.now();
   void saveMCPTraceToWorkflow({
@@ -149,6 +160,10 @@ export async function runToolLoop(
    */
   const transcript: unknown[] = [];
 
+  // Token usage across ALL turns of this run — each turn is its own model call with its
+  // own usage block; the collector sums them and posts once when the loop settles.
+  const usage = makeUsageCollector(node, ctx);
+
   for (turn = 1; turn <= maxTurns; turn++) {
     const scoped: RunContext = {
       ...ctx,
@@ -182,6 +197,7 @@ export async function runToolLoop(
     let spoken = "";
     await readSse(res, modelCall.terminator, async (payload) => {
       await assertOk(node, modelCall, payload, `${node.type} (turn ${turn})`);
+      usage.see(payload);
       await emitter.response(payload, payload.type);
       if (te.transcript?.text) {
         const piece = await evaluate(te.transcript.text, { response: payload });
@@ -252,8 +268,10 @@ export async function runToolLoop(
       recordToolTrace(node, ctx, call.name, args, content, startedAt, ok);
       exchanges.push({ name: call.name, resultContent: content });
       // The RESULT, and only now that it exists. It is never in the HTTP stream: our loop
-      // produced it, which is why it cannot be a `from: response` row.
-      await emitter.tool({ name: call.name, args, output: content });
+      // produced it, which is why it cannot be a `from: response` row. PARSED for the
+      // connector lane (humans and templates read it there — same reason the trace above
+      // parses); the model-facing lane below reads `absorbed`, untouched strings.
+      await emitter.tool({ name: call.name, args, output: parseMaybeJson(content) });
 
       /**
        * ONE ABSORBER, which is the harness's own rule and the one this loop used to break.
@@ -309,6 +327,7 @@ export async function runToolLoop(
     }
   }
 
+  usage.save();
   return 200;
 }
 
