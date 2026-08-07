@@ -117,6 +117,13 @@ export interface ResolvedTheme {
   radius: Record<string, string>;
   shadow: Record<string, string>;
   borderWidth: Record<string, string>;
+  /** Font weights (`font.weight.*`) — SERVED, like every other token.
+   *
+   *  These were the one scale the SDK held as a literal map of four names, so the six the
+   *  foundation actually defines were never all reachable and an org that added its own
+   *  (yasisland's `extrabold`) got silence: the SDK passed the unknown word to CSS, CSS
+   *  dropped the declaration, and the text rendered at whatever it inherited. */
+  weight: Record<string, string | number>;
   lineHeight: Record<string, string | number>;
   text: Record<string, Record<string, string | number>>;
   skeleton: Record<string, unknown>;
@@ -125,6 +132,12 @@ export interface ResolvedTheme {
    *  references ("chat"/"rail"/"panel" → raw host-facing CSS). Resolved by the SDK
    *  like every other token: ONE pipeline, no serve-time rewriting of definitions. */
   appSize: Record<string, string>;
+  /** Grid behaviour (`grid.*`) — currently `stackBelow`, the width at which a columns
+   *  grid stacks. Served, so the SDK holds no threshold of its own. */
+  grid: Record<string, string>;
+  /** PAGE WIDTHS by name (`layout.*`) — aliases onto the space scale so a page-level cap
+   *  reads as what it is. Element sizes stay scale steps; see semantic/layout. */
+  layout: Record<string, string>;
   keyframes: Record<string, Record<string, Record<string, string>>>;
   icons: Record<string, { viewBox?: string; attrs?: Record<string, unknown>; children?: [string, Record<string, unknown>][] }>;
   root: Record<string, unknown>;
@@ -214,8 +227,11 @@ function buildTheme(styles: string, themeFile: string): ResolvedTheme {
     space: bucket("space.", (v) => v),
     radius: bucket("radius.", (v) => v),
     appSize: bucket("appSize.", (v) => v),
+    grid: bucket("grid.", (v) => v),
+    layout: bucket("layout.", (v) => v),
     shadow: bucket("shadow.", (v) => v),
     borderWidth: bucket("border.width.", (v) => v),
+    weight: bucket("font.weight.", (v) => v) as Record<string, string | number>,
     lineHeight: bucket("font.lineHeight.", (v) => v) as Record<string, string | number>,
     text: (() => {
       const out: Record<string, Record<string, string | number>> = {};

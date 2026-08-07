@@ -18,7 +18,7 @@ import { PRIMITIVES, CONDITION_KEYS, STYLE_KEYS, RAW_VALUE, CHILD_NODE_KEYS, PAR
 import { isDefFile, defName, defPath, readDef } from "./defs.mjs";
 
 export function makeWalkNode(ctx) {
-  const { report, checkCondition, checkDimension, appSizesForFile, componentNamesForFile, refResolves, atomsDirExists, stepList, spaceSteps, isTemplatePath, defRoot } = ctx;
+  const { report, checkCondition, checkDimension, checkToken, appSizesForFile, componentNamesForFile, refResolves, atomsDirExists, stepList, spaceSteps, isTemplatePath, defRoot } = ctx;
 
 function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
   if (Array.isArray(node)) return node.forEach((n) => walkNode(n, file, root, widthCap));
@@ -63,6 +63,10 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
     else if (atomsDirExists && !refResolves(node.ref))
       report("error", file, `Ref "${node.ref}". No matching atom (rx/marketplace/atoms) or shared component (rx/marketplace/components); lookup is case-insensitive by name`);
   }
+  // Icon glyphs are SERVED (theme.icons ← styles/semantic/icons), and the SDK draws
+  // nothing when the name misses — a blank where a glyph was meant to be, no error.
+  if (t === "Icon" && typeof node.icon === "string" && !node.icon.includes("{{"))
+    checkToken(file, t, "icon", node.icon);
   if (t === "ComponentSlot") {
     if (!node.select || typeof node.select !== "object")
       report("error", file, `ComponentSlot needs "select" ({} for the conversation flow) (docs/design/05)`);
@@ -188,6 +192,9 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
         else if ((k === "hover" || k === "active") && obj[k] && typeof obj[k] === "object")
           checkKeys(obj[k], `${where}.${k}`);
         else if (DIMENSION_KEYS.has(k)) checkDimension(file, where, k, obj[k]);
+        // Every OTHER value the interpreter resolves against the theme: a name that is
+        // not a token is not an error anywhere downstream, it is a dropped declaration.
+        else checkToken(file, where, k, obj[k]);
       }
     };
     checkKeys(node.style, `${t}.style`);

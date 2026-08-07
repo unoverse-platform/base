@@ -19,9 +19,10 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, relative, dirname, basename, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { DEF_EXTS, isDefFile, defName, defPath, parseDef, readDef } from "./defs.mjs";
-import { PRIMITIVES, CONDITION_KEYS, STYLE_KEYS, RAW_VALUE, CHILD_NODE_KEYS, PARTIAL_DIRS, DIMENSION_KEYS } from "./vocabulary.mjs";
+import { PRIMITIVES, CONDITION_KEYS, STYLE_KEYS, RAW_VALUE, CHILD_NODE_KEYS, PARTIAL_DIRS, DIMENSION_KEYS, DIMENSION_LITERALS, TOKEN_KEYS, LITERAL_VALUES } from "./vocabulary.mjs";
 import { makeWalkNode } from "./walk.mjs";
 import { makeLintFile } from "./file.mjs";
+import { makeTokensForFile } from "./tokens.mjs";
 
 /**
  * Lint every definition under `rxHome`. Prints nothing, exits nothing.
@@ -174,26 +175,175 @@ const defRoot = (file) => {
 // The space scale — a bare numeric dimension value MUST be a real step, or the
 // renderer passes it through as broken CSS and the element auto-sizes silently.
 const spaceSteps = new Set(["0", "full", "auto"]);
+/**
+ * step → the PAGE-WIDTH name that aliases it (`"160" → "reading"`), from semantic/layout.
+ *
+ * This is what makes the rule below safe. `maxWidth` is honestly two things: a PAGE
+ * container's cap and an ELEMENT's own cap (a card at `"90"`), so it cannot be required to
+ * carry a name outright without rejecting the second. But a step that HAS an alias has
+ * exactly one correct spelling, and that is the whole of the rule: not "name your widths",
+ * but "one value, one name". Steps with no alias are left alone, and adding an alias to
+ * `semantic/layout` extends the rule by itself.
+ */
+const layoutAlias = new Map();
 {
-  const styleRoots = [defPath(join(DS, "styles", "base"), "spacing"), ...orgDirs.map((d) => defPath(join(d, "styles", "base"), "spacing"))].filter(Boolean);
-  for (const f of styleRoots) {
-    if (!existsSync(f)) continue;
+  /**
+   * BOTH TIERS. The scale is numeric in `base/spacing` and NAMED in `semantic/spacing`
+   * ("md" → {space.4}), and the server reads both into one `space` bucket (theme.ts
+   * `readTokenDir` over base THEN semantic). Reading only `base` here meant the linter
+   * held a scale the renderer does not have: every t-shirt name was invisible to it, so
+   * the "Real steps:" list it printed omitted the names most definitions actually use,
+   * and an org that defined a numeric step in `semantic/` would have had correct work
+   * rejected. Same class of mistake as a partial app-size set — judge with the whole
+   * answer or not at all.
+   */
+  const spacingFiles = [DS, ...orgDirs].flatMap((d) => [
+    [defPath(join(d, "styles", "base"), "spacing"), "space"],
+    [defPath(join(d, "styles", "semantic"), "spacing"), "space"],
+    // PAGE WIDTHS by name (semantic/layout) are aliases onto this same scale, and `dim()`
+    // resolves them alongside it — so to the dimension check they ARE steps.
+    [defPath(join(d, "styles", "semantic"), "layout"), "layout"],
+  ]);
+  for (const [f, key] of spacingFiles) {
+    if (!f || !existsSync(f)) continue;
     try {
-      const space = readDef(f).space ?? {};
-      for (const k of Object.keys(space)) if (!k.startsWith("$")) spaceSteps.add(k);
+      const scale = readDef(f)[key] ?? {};
+      for (const [k, v] of Object.entries(scale)) {
+        if (k.startsWith("$")) continue;
+        spaceSteps.add(k);
+        // A layout name is an ALIAS onto a step (`reading` → `{space.160}`). Remember which
+        // step it covers, so the rule below can name the alias in its message and, more
+        // importantly, so it fires ONLY where an alias actually exists.
+        if (key === "layout") {
+          const step = /^\{space\.([^}]+)\}$/.exec(String(v?.$value ?? ""))?.[1];
+          if (step && !layoutAlias.has(step)) layoutAlias.set(step, k);
+        }
+      }
     } catch { /* linted on its own */ }
   }
 }
-const stepList = () => [...spaceSteps].filter((s) => /^\d/.test(s)).sort((a, b) => Number(a) - Number(b)).join(", ");
+const stepList = () => {
+  const all = [...spaceSteps];
+  const nums = all.filter((s) => /^\d/.test(s)).sort((a, b) => Number(a) - Number(b));
+  const named = all.filter((s) => !/^\d/.test(s)).sort();
+  return [...nums, ...named].join(", ");
+};
+/**
+ * A DIMENSION IS A SCALE STEP — numeric ("8") or named ("md"), both live in the same
+ * `space` bucket. The named half went unchecked, so `gap: mdd` resolved to nothing and
+ * CSS dropped the declaration: the gap silently became zero with a green lint run behind
+ * it. Same failure as an invented radius, one bucket over.
+ */
+/**
+ * PAGE-LEVEL keys: a container's cap and the responsive thresholds. These are the places a
+ * width is a PAGE decision rather than an element's own size, so these are where the named
+ * scale belongs (`maxWidth: reading`, not `"160"`). See `layoutAlias` for why the rule is
+ * keyed on the alias existing rather than on the key alone.
+ */
+const PAGE_WIDTH_KEYS = new Set(["maxWidth", "hideBelow", "hideAbove", "stackBelow"]);
+
 const checkDimension = (file, where, key, v) => {
   for (const raw of Array.isArray(v) ? v : [v]) {
     // A NUMBER is held to the same law as a numeric string — raw JSON numbers
     // (`"maxWidth": 560`) must not smuggle pixel values past the scale.
     const val = typeof raw === "number" ? String(raw) : raw;
     if (typeof val !== "string" || val.includes("{{")) continue;
-    if (/^\d+(\.\d+)?$/.test(val) && spaceSteps.size > 3 && !spaceSteps.has(val))
-      report("error", file, `${where}.${key}: "${val}" is not a step on the space scale. Invalid values fall through as broken CSS (auto sizing). Real steps: ${stepList()} (docs/design/06)`);
+    if (spaceSteps.size <= 3) continue; // no scale readable: abstain rather than guess
+    // ONE VALUE, ONE SPELLING. A page-level width whose step has a name must use the name,
+    // or the scale drifts straight back to two vocabularies for the same number — which is
+    // the state the t-shirt aliases left it in, and the reason they were retired.
+    if (PAGE_WIDTH_KEYS.has(key) && layoutAlias.has(val))
+      report("error", file, `${where}.${key}: "${val}" has a name — use "${layoutAlias.get(val)}". A page-level width reads as what it IS; a bare step here puts two spellings on one value (docs/design/06)`);
+    // A shorthand ("auto auto 0 0" on `inset`) is a list of dimensions; each word is one.
+    for (const word of val.trim().split(/\s+/)) {
+      if (spaceSteps.has(word) || DIMENSION_LITERALS.has(word)) continue;
+      // Anything starting with a digit that is NOT a bare step is a unit-bearing or
+      // percentage value; LAW 1 owns those, and `calc()`/`%` are legitimate escape hatches.
+      if (/^\d/.test(word) && !/^\d+(\.\d+)?$/.test(word)) continue;
+      if (/[()%]/.test(word)) continue; // calc(), min(), clamp(), 50%
+      report("error", file, `${where}.${key}: "${word}" is not a step on the space scale. Invalid values fall through as broken CSS (auto sizing). Real steps: ${stepList()} (docs/design/06)`);
+    }
   }
+};
+
+/**
+ * LAW 1's OTHER HALF — the name has to resolve.
+ *
+ * The raw-value rule (file.mjs) catches `#ff0000` and `12px`. It cannot catch `radius: lgg`,
+ * and nothing downstream catches it either: the SDK resolves `theme.radius[name] ?? name`,
+ * hands CSS the literal `lgg`, and CSS drops the declaration. The corner renders square,
+ * the lint run is green, and the only report is a designer noticing weeks later.
+ *
+ * `font` is the worst of them — it is applied ONLY on a hit (`if (s.font && theme.text[s.font])`),
+ * so an invented text style applies no size, weight or line-height whatsoever.
+ *
+ * The rule ABSTAINS rather than guesses: `tokensForFile` returns null wherever the token
+ * set cannot be fully read (a developer's project, which has no design system on disk),
+ * because judging against half a set rejects correct work — the trap `appSizesForFile`
+ * already documents at length.
+ */
+const tokensForFile = makeTokensForFile({ DS, orgDirs });
+const checkToken = (file, where, key, v) => {
+  const T = tokensForFile(file);
+  if (!T) return;
+  // A bound value is DATA — resolved from the record at render time, unknowable here.
+  const named = (x) => typeof x === "string" && !x.includes("{{") && x.trim() !== "";
+  const bad = (k, val, bucket, extra = "") =>
+    report(
+      "error",
+      file,
+      `${where}.${k}: "${val}" is not a ${bucket} token. Unknown names are handed to CSS verbatim and dropped — the style simply does not apply, with no error anywhere${extra}. Known: ${[...T[bucket]].sort().join(", ") || "none"} (docs/design/06)`,
+    );
+
+  // The straightforward one-bucket keys (background/color/shadow/radius*/font/lineHeight).
+  const bucket = TOKEN_KEYS[key];
+  if (bucket) {
+    if (!named(v)) return;
+    if (LITERAL_VALUES.has(v)) return;
+    // `lineHeight` legitimately takes a bare ratio (1.4) as well as a token.
+    if (key === "lineHeight" && /^\d*\.?\d+$/.test(v)) return;
+    // A bare `0` radius is the one dimensionless CSS value that needs no unit and has no
+    // token (a squared corner on a chat bubble). It resolves; nothing is dropped.
+    if (bucket === "radius" && v === "0") return;
+    if (!T[bucket].has(v))
+      bad(key, v, bucket, key === "font" ? ", and an unknown text style applies NO size, weight or line-height at all" : "");
+    return;
+  }
+
+  // `border` is a PAIR: an optional width token then a colour, e.g. "thick action.primary".
+  // The colour resolves as `color.border.<name>` first, then `color.<name>` (sdk/style.ts).
+  if (/^border(Top|Right|Bottom|Left)?$/.test(key)) {
+    if (!named(v) || LITERAL_VALUES.has(v)) return;
+    const parts = v.trim().split(/\s+/);
+    const [w, c] = parts.length > 1 ? parts : [null, parts[0]];
+    if (w !== null && !T.borderWidth.has(w))
+      report("error", file, `${where}.${key}: "${w}" is not a border-width token (the leading word of "<width> <colour>"). Known: ${[...T.borderWidth].sort().join(", ") || "none"} (docs/design/06)`);
+    if (!LITERAL_VALUES.has(c) && !T.color.has(`border.${c}`) && !T.color.has(c))
+      report("error", file, `${where}.${key}: "${c}" resolves to no colour token (tried border.${c}, then ${c}). The border renders with no colour and nothing reports it (docs/design/06)`);
+    return;
+  }
+
+  // `weight` — an ordinary served token (`font.weight.*`) since the SDK stopped holding
+  // the scale as a literal map. A raw number is CSS's own form and passes through.
+  if (key === "weight") {
+    if (!named(v) || /^\d+$/.test(v)) return;
+    if (!T.weight.has(v)) bad("weight", v, "weight");
+    return;
+  }
+
+  // `radial` — both stops are colour tokens; `at` is a value or a binding.
+  if (key === "radial" && v && typeof v === "object") {
+    for (const k of ["fill", "track"])
+      if (named(v[k]) && !LITERAL_VALUES.has(v[k]) && !T.color.has(v[k])) bad(`radial.${k}`, v[k], "color");
+    return;
+  }
+
+  // `animation.name` names a SERVED keyframe; an unknown one animates nothing.
+  if (key === "animation" && v && typeof v === "object" && named(v.name) && !T.keyframes.has(v.name))
+    bad("animation.name", v.name, "keyframes");
+
+  // The Icon primitive's glyph (passed by walkNode, not a style key).
+  if (key === "icon" && named(v) && !T.icons.has(v)) bad("icon", v, "icons");
 };
 
 // atoms — case-insensitive by filename (the platform's lookup rule)
@@ -460,7 +610,7 @@ function componentNamesForFile(file) {
   // The run context: everything the extracted rule modules close over. Built here so it
   // cannot outlive the run, and passed once rather than threaded as ten parameters.
   const ctx = {
-    RX, DS, orgDirs, report, spaceSteps, stepList, checkDimension, checkCondition,
+    RX, DS, orgDirs, report, spaceSteps, stepList, checkDimension, checkToken, checkCondition,
     appSizesForFile, componentNamesForFile, refResolves, atomsDirExists,
     isFixture, isHook, isManifest, isTemplatePath, defRoot, readText,
   };

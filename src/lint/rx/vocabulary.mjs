@@ -23,7 +23,7 @@ export const STYLE_KEYS = new Set([
   "width", "height", "maxWidth", "minWidth", "minHeight", "maxHeight", "flex",
   "padding", "margin", "gap", "overflow",
   "position", "inset", "top", "right", "bottom", "left", "zIndex",
-  "direction", "wrap", "align", "justify", "display", "columns", "container", "hideBelow",
+  "direction", "wrap", "align", "justify", "display", "columns", "span", "stackBelow", "container", "hideBelow", "hideAbove",
   "background", "radial", "border", "borderTop", "borderRight", "borderBottom", "borderLeft",
   "outline", "shadow", "radius", "radiusTopLeft", "radiusTopRight", "radiusBottomLeft", "radiusBottomRight",
   "font", "weight", "lineHeight", "color", "textAlign", "fit",
@@ -41,4 +41,53 @@ export const PARTIAL_DIRS = new Set(["layouts", "states", "components", "blocks"
 export const DIMENSION_KEYS = new Set([
   "width", "height", "maxWidth", "minWidth", "minHeight", "maxHeight",
   "gap", "padding", "margin", "top", "right", "bottom", "left", "inset",
+  // width THRESHOLDS, named on the same scale as any other width
+  "hideBelow", "hideAbove", "stackBelow",
 ]);
+
+/**
+ * WHICH THEME BUCKET EACH STYLE KEY RESOLVES AGAINST — mirrors sdk/style.ts `computeCss`,
+ * which is the only place that decides it. Dimensions are absent because the space scale
+ * has its own check (`checkDimension`); `border*` is absent because its value is a PAIR
+ * (an optional width token + a colour token) and is destructured separately.
+ *
+ * A key the interpreter passes straight through (`overflow`, `outline`, `cursor`,
+ * `transform`, `transition`, `position`, `display`, …) is absent on purpose: there is no
+ * bucket to check it against, so there is nothing here to be wrong about.
+ */
+export const TOKEN_KEYS = {
+  background: "color",
+  color: "color",
+  shadow: "shadow",
+  radius: "radius",
+  radiusTopLeft: "radius",
+  radiusTopRight: "radius",
+  radiusBottomLeft: "radius",
+  radiusBottomRight: "radius",
+  font: "text",
+  lineHeight: "lineHeight",
+};
+
+/**
+ * CSS keywords a token key may legitimately carry instead of a token name. Kept tiny on
+ * purpose: every one of these is a value with no token equivalent, and anything else that
+ * "just works in CSS" is precisely the web-ism the closed vocabulary exists to keep out.
+ */
+export const LITERAL_VALUES = new Set(["none", "transparent", "inherit", "currentColor", "unset", "initial", "auto"]);
+
+/**
+ * CSS sizing keywords a dimension may carry that are NOT scale steps. `full` and `auto`
+ * are already seeded into the scale itself (the SDK special-cases `full` → 100%); these
+ * are the intrinsic-sizing words a layout legitimately needs and no token can express.
+ */
+export const DIMENSION_LITERALS = new Set([
+  "auto", "full", "none", "inherit", "unset", "initial",
+  "fit-content", "min-content", "max-content",
+]);
+
+/**
+ * `weight` used to be the exception here: the SDK held the scale as a literal four-name
+ * map, so this file had to mirror THAT rather than the tokens. It now resolves from
+ * `theme.weight` like every other value, so it is an ordinary entry above and this note
+ * only survives to say why one is not needed.
+ */
