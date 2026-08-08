@@ -366,6 +366,88 @@ const dsComponentNames = new Set(
 // A valid Ref target if there's ANY resolvable home (atoms OR DS components).
 const refResolves = (ref) => atomNames.has(ref.toLowerCase()) || dsComponentNames.has(ref.toLowerCase());
 
+/**
+ * THE KEY IS ONE STRING, CASE AND ALL.
+ *
+ * Ref lookup above is case-insensitive on purpose, and the marketplace is not: an item is
+ * fetched as `items/<kind>/<key>.json` over HTTP, off a case-sensitive host. So a name that
+ * disagrees with itself resolves forever in `rx/` and 404s the moment anyone installs it.
+ *
+ * That is not hypothetical. 2026-08-06: twelve atoms were unreachable from every universe
+ * because git held `Avatar.json` while the build wrote `avatar.json`. macOS is
+ * case-insensitive, so every local check passed, git never recorded the rename, and Linux
+ * served what git held. The error surfaced as `could not fetch atom/avatar (HTTP 404)` in
+ * the Installed view, months after the cause.
+ *
+ * Nothing in `rx/` could have caught it, because `rx/` was correct. What was missing was a
+ * rule that the key agrees with itself EXACTLY, which is what this checks:
+ *
+ *   filename === `name:` === every Ref that points at it
+ *
+ * Compared as strings, never through the filesystem. `existsSync("avatar.json")` matches
+ * `Avatar.json` on a Mac, which is precisely how this stayed invisible.
+ */
+// COMPONENTS FIRST so ATOMS OVERWRITE THEM, matching `refResolves` above, which tries
+// atoms before components. A name can exist as both (`table` is an atom AND a shared
+// component); resolution picks the atom, so the canonical spelling must be the atom's.
+// Built the other way round, this told an author to write `Table` for a Ref that resolves
+// to the atom `table` — a correction that would have broken what it touched.
+const canonicalKeys = new Map(); // lowercased key -> the exact-case key
+for (const [dir, isDir] of [[join(DS, "components"), true], [join(DS, "atoms"), false]]) {
+  if (!existsSync(dir)) continue;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith(".")) continue;
+    if (isDir ? !e.isDirectory() : !isDefFile(e.name)) continue;
+    const key = isDir ? e.name : defName(e.name);
+    canonicalKeys.set(key.toLowerCase(), key);
+  }
+}
+
+/** The exact-case key a Ref should use, or null when it resolves to nothing. */
+const canonicalRef = (ref) => canonicalKeys.get(ref.toLowerCase()) ?? null;
+
+// The filename is the key. A `name:` that disagrees with it is the drift above, waiting.
+//
+// EVERY HOME, not just the design system. This checked `marketplace/atoms` and
+// `marketplace/components` only, so an org's own components and templates were invisible to
+// it and their drift had to be found by hand: `course-card/` holding `name: CourseCard`, and
+// every template folder holding a display sentence (`name: BPP Assistant`) where the key
+// belongs. A rule that covers the shared tier and not the private one teaches that the
+// private one is exempt.
+const keyHomes = [
+  [join(DS, "atoms"), false],
+  [join(DS, "components"), true],
+];
+for (const orgDir of orgDirs) {
+  keyHomes.push([join(orgDir, "components"), true], [join(orgDir, "templates"), true]);
+}
+for (const [dir, isDir] of keyHomes) {
+  if (!existsSync(dir)) continue;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith(".")) continue;
+    if (isDir ? !e.isDirectory() : !isDefFile(e.name)) continue;
+    const key = isDir ? e.name : defName(e.name);
+    // A TEMPLATE KEEPS ITS DEFINITION IN `manifest.yaml`, a component in `<name>.yaml`.
+    // Looking only for the latter meant every template folder was skipped in silence, so
+    // the rule reported them clean while each held a display sentence where its key belongs.
+    // A guard that cannot find a file must not read that as nothing to check.
+    const file = isDir
+      ? [`${e.name}.yaml`, `${e.name}.json`, "manifest.yaml", "manifest.json"]
+          .map((n) => join(dir, e.name, n))
+          .find(existsSync)
+      : join(dir, e.name);
+    if (!file || !existsSync(file)) continue;
+    const def = readDef(file);
+    if (!def || typeof def.name !== "string") continue;
+    if (def.name !== key)
+      report(
+        "warn",
+        file,
+        `name: "${def.name}" disagrees with the filename "${key}". The key is fetched as items/<kind>/${key}.json over HTTP, so the two must match exactly, capitals included`,
+      );
+  }
+}
+
 // definition homes: marketplace components/atoms + each org's templates AND
 // components (same law everywhere — an org component is a component, just org-private)
 const homes = [{ dir: join(DS, "components") }, { dir: join(DS, "atoms") }];
@@ -611,7 +693,7 @@ function componentNamesForFile(file) {
   // cannot outlive the run, and passed once rather than threaded as ten parameters.
   const ctx = {
     RX, DS, orgDirs, report, spaceSteps, stepList, checkDimension, checkToken, checkCondition,
-    appSizesForFile, componentNamesForFile, refResolves, atomsDirExists,
+    appSizesForFile, componentNamesForFile, refResolves, canonicalRef, atomsDirExists,
     isFixture, isHook, isManifest, isTemplatePath, defRoot, readText,
   };
   const walkNode = makeWalkNode(ctx);

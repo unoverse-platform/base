@@ -63,9 +63,17 @@ export interface ComponentType {
   schema: Record<string, unknown>;
 }
 
-/** An atom's name as the kind a document carries: the Document switches on exactly this. */
+/**
+ * An atom's name as the kind a document carries: the Document switches on exactly this.
+ *
+ * THE KIND IS THE ATOM'S NAME, unchanged. Atoms are kebab (`key-facts`), so kinds are kebab,
+ * and there is one spelling of a thing across the whole system: the file, the `name:`, the
+ * Ref, the kind and the Switch case. Anything that transforms the name here is a second
+ * convention, and a second convention is how `Avatar.json` and `avatar.json` came to be the
+ * same atom under two names.
+ */
 function kindOf(name: string): string {
-  return name ? name[0].toLowerCase() + name.slice(1) : "";
+  return String(name ?? "");
 }
 
 /** Every Markdown atom, compiled. Sorted so the schema is stable call to call. */

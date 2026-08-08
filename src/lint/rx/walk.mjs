@@ -18,7 +18,7 @@ import { PRIMITIVES, CONDITION_KEYS, STYLE_KEYS, RAW_VALUE, CHILD_NODE_KEYS, PAR
 import { isDefFile, defName, defPath, readDef } from "./defs.mjs";
 
 export function makeWalkNode(ctx) {
-  const { report, checkCondition, checkDimension, checkToken, appSizesForFile, componentNamesForFile, refResolves, atomsDirExists, stepList, spaceSteps, isTemplatePath, defRoot } = ctx;
+  const { report, checkCondition, checkDimension, checkToken, appSizesForFile, componentNamesForFile, refResolves, canonicalRef, atomsDirExists, stepList, spaceSteps, isTemplatePath, defRoot } = ctx;
 
 function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
   if (Array.isArray(node)) return node.forEach((n) => walkNode(n, file, root, widthCap));
@@ -62,6 +62,14 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
       report("error", file, `Ref needs "ref": "<atom name>" (docs/design/03)`);
     else if (atomsDirExists && !refResolves(node.ref))
       report("error", file, `Ref "${node.ref}". No matching atom (rx/marketplace/atoms) or shared component (rx/marketplace/components); lookup is case-insensitive by name`);
+    // RESOLVES IS NOT ENOUGH. Ref lookup ignores case; the marketplace fetches
+    // items/<kind>/<key>.json off a case-sensitive host. A Ref that differs only in case
+    // renders forever in rx/ and 404s on install (index.mjs, canonicalRef).
+    else if (canonicalRef) {
+      const exact = canonicalRef(node.ref);
+      if (exact && exact !== node.ref)
+        report("warn", file, `Ref "${node.ref}" should be "${exact}". It resolves here because lookup ignores case, and fails on install because the marketplace does not`);
+    }
   }
   // Icon glyphs are SERVED (theme.icons ← styles/semantic/icons), and the SDK draws
   // nothing when the name misses — a blank where a glyph was meant to be, no error.

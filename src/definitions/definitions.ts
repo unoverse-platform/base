@@ -630,8 +630,8 @@ export interface AppManifest {
    *  the CONVERSATION (not the turn) so every re-call hydrates the same slice, and the
    *  client's new-turn reset skips it — it stays on screen until replaced or closed. */
   lifetime?: "turn" | "conversation";
-  /** Workbench MOCK: what each STATE's preview seeds — `{ "<state>": ["coursecard",
-   *  "coursecard"] }` (a repeated name = several instances, e.g. a card rail). The
+  /** Workbench MOCK: what each STATE's preview seeds — `{ "<state>": ["course-card",
+   *  "course-card"] }` (a repeated name = several instances, e.g. a card rail). The
    *  author decides per state; the seeded instances are written INTO that state's view
    *  (the same setValue the runtime performs). Not used in LIVE — the workflow decides. */
   preview?: Record<string, string[]>;

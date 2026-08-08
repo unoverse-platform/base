@@ -150,7 +150,7 @@ export function renderContentCards(
 // BEFORE this projection is applied — and were costing ~100k tokens per search in the
 // model's thread (observed live: context-window overflow on the first refinement turn).
 
-/** `unoverse://components/journeyfinder` → `journeyfinder` (the render type). */
+/** `unoverse://components/journey-finder` → `journey-finder` (the render type). */
 export function componentTypeFromAppUri(app: string): string {
   return String(app).split("/").pop() || "";
 }

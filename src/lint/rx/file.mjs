@@ -117,7 +117,7 @@ function lintFile(file) {
       }
       if (json.mode !== undefined && json.defaultState === undefined)
         report("warn", file, `"mode" was renamed to "defaultState". Still read as a fallback, but rename it (docs/design/04)`);
-      // `preview` — the per-state MOCK map ({ "<state>": ["coursecard", …] }): each key
+      // `preview` — the per-state MOCK map ({ "<state>": ["course-card", …] }): each key
       // must be a states/ file, each name a real component. A repeated name seeds
       // several instances (a card rail).
       if (json.preview !== undefined) {
