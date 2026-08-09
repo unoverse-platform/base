@@ -13,7 +13,7 @@
 // ── ground truth (mirrors rx/_schema/unoverse.schema.json + server guards) ──
 export const PRIMITIVES = new Set([
   "Box", "Stack", "Row", "Column", "Each", "Switch", "ComponentSlot", "Timeline",
-  "Text", "Image", "Button", "Input", "Markdown", "Skeleton", "Icon", "Ref",
+  "Text", "Image", "Button", "Input", "Select", "Markdown", "Skeleton", "Icon", "Ref", "Orb",
 ]);
 export const CONDITION_KEYS = new Set(["field", "eq", "ne", "in"]);
 // the portable style vocabulary — every key the SDK interpreter maps (sdk/style.ts).

@@ -80,16 +80,16 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
       report("error", file, `ComponentSlot needs "select" ({} for the conversation flow) (docs/design/05)`);
     else if (node.select.from === "all" && !node.select.type && !node.select.where)
       report("warn", file, `global ComponentSlot (from:"all") with no "type" and no "where". Selects OLDEST-first; a trap in a multi-turn surface. Filter by "where" (the reaction contract, §5b) or pin "type", unless the shell is deliberately catch-all (docs/design/05)`);
-    // STATE-SELECTED UI (STATE_MODEL §5b): a reaction surface reacts to the component's
-    // VIEW — the `defaultState` discriminant — never to a component's internal state
-    // (step/phase/…) which is private to the component. Selecting on any other field
-    // reaches past the view boundary the whole model rests on.
-    else if (node.select.where && node.select.where.field && node.select.where.field !== "defaultState")
-      report("warn", file, `reaction surface selects on "${node.select.where.field}". A template reacts to a component's VIEW ("defaultState"), never its internal state (that is private to the component). Select on "defaultState" (STATE_MODEL §5b)`);
-    // ONE STATE AT A TIME (docs/design/04): the active state is THE latest surfaced
-    // view, so a surface must claim exactly ONE view by `eq` — `ne`/`in`/bare selects
-    // make "which state is the template in?" ambiguous.
-    else if (node.select.where && node.select.where.field === "defaultState" && typeof node.select.where.eq !== "string")
+    // STATE-SELECTED UI (STATE_MODEL §5): a reaction surface reacts to the component's
+    // PUBLIC state — the `view` axis (`defaultState` = legacy alias) — never to a
+    // component's internal state (step/phase/…) which is private to the component.
+    // Selecting on any other field reaches past the boundary the whole model rests on.
+    else if (node.select.where && node.select.where.field && node.select.where.field !== "view" && node.select.where.field !== "defaultState")
+      report("warn", file, `reaction surface selects on "${node.select.where.field}". A template reacts to a component's PUBLIC state ("view"; legacy "defaultState"), never its internal state (that is private to the component) (STATE_MODEL §5)`);
+    // ONE STATE AT A TIME: the template is in exactly one state, so a surface must
+    // claim exactly ONE view by `eq` — `ne`/`in`/bare selects make "which state is
+    // the template in?" ambiguous.
+    else if (node.select.where && (node.select.where.field === "view" || node.select.where.field === "defaultState") && typeof node.select.where.eq !== "string")
       report("error", file, `a reaction surface claims exactly ONE view: select.where needs "eq": "<view>": ne/in/bare make the template's active state ambiguous (docs/design/04)`);
   }
 

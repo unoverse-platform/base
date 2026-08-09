@@ -230,6 +230,30 @@ export interface UnoverseDefinition {
    *  templates never carry this — byte-for-byte the classic behavior. */
   layouts?: Record<string, unknown>;
   defaultLayout?: string;
+  /** TEMPLATES (STATE_MODEL v2 §5 rules 3+5): the DECLARED STATE ORDER — the priority
+   *  ladder and arrival-scan order, from the manifest's `stateOrder`. First entry
+   *  outranks all below it; no name is special. Absent → legacy recency semantics. */
+  stateOrder?: string[];
+  /** COMPONENTS (STATE_MODEL v2 §5 rule 2): the PUBLIC MENU — the top-level state
+   *  names of the authored `state.view` tree, compiled at serve time. What hosts may
+   *  place at spawn and templates may react to; nested substates never appear here. */
+  publicStates?: string[];
+  /** COMPONENTS (STATE_MODEL v2): the view tree's declared initial — the base the
+   *  client retracts to and the fallback when no host placement matches. */
+  initialView?: string;
+  /** COMPONENTS (STATE_MODEL v2): the authored `state.view` TREE, served as a nested
+   *  projection so viewers render states from the DECLARATION instead of scanning
+   *  layouts for Switches (the scan surfaced embedded components' content selectors —
+   *  a Document's tab cases — as fake states). Public states in tree order, each with
+   *  its layout, its substep discriminant (`on` + `initial`), and its private
+   *  substates. The tree stays the single source of truth; this is its projection. */
+  stateTree?: {
+    name: string;
+    layout?: string;
+    on?: string;
+    initial?: string;
+    states?: { name: string; layout?: string }[];
+  }[];
 }
 
 /** A COMPONENT manifest — `rx/components/<name>/manifest.json`. OPTIONAL: its PRESENCE
@@ -291,6 +315,24 @@ function remapStyleBindings(style: AnyNode, propMap: Record<string, string>): vo
 function remapFields(node: AnyNode, propMap: Record<string, string>): void {
   if (node.bind) for (const k of Object.keys(node.bind)) if (propMap[node.bind[k]]) node.bind[k] = propMap[node.bind[k]];
   if (typeof node.visibleWhen === "string" && propMap[node.visibleWhen]) node.visibleWhen = propMap[node.visibleWhen];
+  // THE OBJECT FORM REMAPS TOO. A guard is a guard whichever way it is written, and only
+  // the string form was carried across: an atom guarding on `{ field: "value", ne: "" }`
+  // kept testing its OWN prop name after the host remapped `value` to its field, so the
+  // guard read an absent key and the branch never showed. Silent, and it bit form-select
+  // the day it was written (2026-08-09).
+  if (node.visibleWhen && typeof node.visibleWhen === "object" && !Array.isArray(node.visibleWhen)) {
+    const g = node.visibleWhen as { field?: string };
+    if (typeof g.field === "string" && propMap[g.field]) g.field = propMap[g.field];
+  }
+  // `when` style variants are the same predicate wearing a different hat: an atom whose
+  // LOOK is data-driven (a switch track filling when `on` is true) must follow its host's
+  // field for the same reason.
+  const when = (node.style as AnyNode | undefined)?.when;
+  if (Array.isArray(when)) {
+    for (const v of when as { field?: string }[]) {
+      if (v && typeof v.field === "string" && propMap[v.field]) v.field = propMap[v.field];
+    }
+  }
   if (node.style && typeof node.style === "object") remapStyleBindings(node.style as AnyNode, propMap);
   if (Array.isArray(node.children)) node.children.forEach((c: AnyNode) => remapFields(c, propMap));
   if (node.template) remapFields(node.template as AnyNode, propMap); // Each item subtree
@@ -434,7 +476,16 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
       const path = defPath(dir, lower);
       if (path) {
         const raw = readDefCached<UnoverseDefinition>(path);
-        if (k === "atom") return raw;
+        // AN ATOM MAY COMPOSE ANOTHER ATOM, so it expands like everything else. Returning
+        // it raw was safe only while no atom carried a `Ref`: the composition resolver
+        // recurses, so a COMPONENT still drew the whole tree, but the atom served on its
+        // own (Studio's `unoverse://atoms/{name}`) kept a bare `Ref` that renders as
+        // NOTHING — observed live 2026-08-09, a form-toggle with no switch. Cloned before
+        // expanding, because the parsed object is shared and expansion mutates in place.
+        if (k === "atom") {
+          const sig = `${path}:${statSync(path).mtimeMs};${dirSignature([SHARED_DIR.atom])}`;
+          return cachedBySignature(`def:atom:${lower}`, sig, () => expandRefs(structuredClone(raw)));
+        }
         const sig = `${path}:${statSync(path).mtimeMs};${dirSignature([SHARED_DIR.atom, SHARED_DIR.component])}`;
         return cachedBySignature(`def:${k}:${org ?? ""}:${lower}`, sig, () => ({ ...expandRefs(structuredClone(raw)), ...(org ? { org } : {}) }));
       }
@@ -482,6 +533,8 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
             // The render contract: the manifest's arrival `defaultState` seeds the composed
             // `state` block, so the SDK (which merges def.state beneath live data) renders
             // that face on arrival. Falls back to any authored state, else "inline".
+            // (Legacy path — a v2 `state.view` tree below supersedes it: viewOf reads
+            // `view` before `defaultState`, so the compiled scalar wins.)
             if (m.defaultState)
               def.state = { ...((def.state as Record<string, unknown>) ?? {}), defaultState: m.defaultState };
             // A hook's credentials, carried so the canvas offers the same picker a node
@@ -510,6 +563,106 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
               def.layouts = Object.fromEntries(
                 names.map((n) => [n, expandNode(composeIncludes({ $include: `layouts/${n}` }, folderDir) as AnyNode)]),
               );
+            }
+          }
+          // STATE MODEL v2 (UNOVERSE_STATE_MODEL §5 rule 5): a template's manifest
+          // `stateOrder` is served on the def — the SDK's priority ladder and
+          // arrival-scan order. Absent → the SDK stays in legacy recency mode.
+          if (k === "template" && manifestPath) {
+            const so = readDefCached<{ stateOrder?: unknown }>(manifestPath).stateOrder;
+            if (Array.isArray(so)) def.stateOrder = so.filter((n): n is string => typeof n === "string");
+          }
+          // THE TEMPLATE TREE (STATE_MODEL v2, template tier — sab checkpoint,
+          // 2026-08-08): the manifest's `states:` block is the template's state
+          // machine, compiled exactly like a component's `state.view` tree:
+          //  - def.stateTree  = the nested projection (viewers render it)
+          //  - def.stateOrder = the REACTION ladder — top-level names minus the
+          //    BASE (the state named for the default layout), in declared order.
+          //    Supersedes an authored `stateOrder`.
+          //  - CONTAINMENT is structural: a base substate (welcome) exists ONLY in
+          //    the base arrangement. Its composed subtree is STRIPPED from every
+          //    other layout — no hand-written guard, the declaration is enforced
+          //    by compilation. (Identified by structural equality: the composed
+          //    states/<name> file IS the inlined node.)
+          if (k === "template" && manifestPath) {
+            const mStates = readDefCached<{ states?: Record<string, { states?: Record<string, unknown> } | null> }>(manifestPath).states;
+            if (mStates && typeof mStates === "object" && !Array.isArray(mStates)) {
+              const names = Object.keys(mStates);
+              const base = names.includes(defaultLayout) ? defaultLayout : names[0];
+              def.stateTree = names.map((n) => {
+                const s = mStates[n];
+                const entry: NonNullable<UnoverseDefinition["stateTree"]>[number] = { name: n };
+                if (s && typeof s === "object" && s.states && typeof s.states === "object")
+                  entry.states = Object.keys(s.states).map((sub) => ({ name: sub }));
+                return entry;
+              });
+              def.stateOrder = names.filter((n) => n !== base);
+              const baseSubs = Object.keys((mStates[base] as { states?: Record<string, unknown> } | null)?.states ?? {});
+              if (def.layouts && baseSubs.length) {
+                const statesDir = join(folderDir, "states");
+                const marks = baseSubs
+                  .map((s) => defPath(statesDir, s))
+                  .filter((p): p is string => Boolean(p))
+                  .map((p) => JSON.stringify(expandNode(composeIncludes(readDefCached(p), folderDir) as AnyNode)));
+                const strip = (node: unknown): unknown => {
+                  if (Array.isArray(node)) return node.filter((c) => !marks.includes(JSON.stringify(c))).map(strip);
+                  if (node && typeof node === "object") {
+                    const out: AnyNode = {};
+                    for (const [k2, v2] of Object.entries(node)) out[k2] = strip(v2);
+                    return out;
+                  }
+                  return node;
+                };
+                for (const n of Object.keys(def.layouts)) if (n !== base) def.layouts[n] = strip(def.layouts[n]);
+              }
+            }
+          }
+          // STATE MODEL v2 (UNOVERSE_STATE_MODEL §5 rules 1+2): an authored
+          // `state.view` TREE is the component's state machine — public states owning
+          // layouts, private substates nested beneath. It COMPILES here; the tree
+          // itself never reaches the render scope:
+          //   - def.publicStates = the public menu (top-level names, tree order)
+          //   - def.initialView  = the declared initial (the retract/fallback base)
+          //   - def.state.view   → the scalar initial (the render scope reads a value)
+          //   - a nested `on` + `initial` pair → its scalar initial (the substep key)
+          if (k === "component") {
+            const tree = (def.state as Record<string, unknown> | undefined)?.view as
+              | { initial?: unknown; states?: Record<string, { on?: unknown; initial?: unknown } | null> }
+              | undefined;
+            if (tree && typeof tree === "object" && tree.states && typeof tree.states === "object") {
+              const names = Object.keys(tree.states);
+              const initial = typeof tree.initial === "string" ? tree.initial : names[0];
+              def.publicStates = names;
+              def.initialView = initial;
+              // The nested projection viewers render from (never scan layouts for it).
+              def.stateTree = names.map((n) => {
+                const s = (tree.states as Record<string, { layout?: unknown; on?: unknown; initial?: unknown; states?: Record<string, { layout?: unknown } | null> } | null>)[n];
+                const entry: NonNullable<UnoverseDefinition["stateTree"]>[number] = { name: n };
+                if (s && typeof s === "object") {
+                  if (typeof s.layout === "string") entry.layout = s.layout;
+                  if (typeof s.on === "string") entry.on = s.on;
+                  if (typeof s.initial === "string") entry.initial = s.initial;
+                  if (s.states && typeof s.states === "object")
+                    entry.states = Object.entries(s.states).map(([k, v]) => ({
+                      name: k,
+                      ...(v && typeof v === "object" && typeof v.layout === "string" ? { layout: v.layout } : {}),
+                    }));
+                }
+                return entry;
+              });
+              // ONE AXIS ON A MIGRATED SLICE. The manifest's `defaultState` is seeded above
+              // for legacy components; a component with a tree has already said where it
+              // arrives, so the alias is dropped here rather than shipped alongside `view`.
+              // Two spellings on one slice is how a stale reader keeps working by accident:
+              // it reads the alias, sees the ARRIVAL state forever, and never notices the
+              // component moved. (The manifest keeps the key: at app level it is the load
+              // mode the router branches on, a different axis with the same name.)
+              const { defaultState: _legacyAlias, ...authored } = (def.state ?? {}) as Record<string, unknown>;
+              const flat: Record<string, unknown> = { ...authored, view: initial };
+              for (const s of Object.values(tree.states))
+                if (s && typeof s === "object" && typeof s.on === "string" && typeof s.initial === "string")
+                  flat[s.on] = s.initial;
+              def.state = flat;
             }
           }
           return k === "atom" ? def : expandRefs(def);
@@ -784,21 +937,43 @@ function stateOrder(kind: "template" | "component", ref: string): string[] {
   const lower = parseRef(ref).name.toLowerCase();
   const hit = findFolder(kind, ref);
   if (!hit) return [];
-  // An EXPLICIT authored order wins (first = the default the viewer lands on).
-  // A manifest-only template has no envelope, so the manifest is the home for it —
-  // `stateOrder: [...]` there ranks the states/ folder just like an envelope would.
+  // An EXPLICIT authored order ranks FIRST (v2: the manifest `stateOrder` is the
+  // REACTION-state priority ladder — STATE_MODEL §5 rule 5 — and lists only those).
+  // States it does not name (the base arrangement's private substates, welcome/
+  // conversation) rank AFTER it, in the order the STRUCTURE includes them — the
+  // walk below — so the first included substate is the viewer's landing default.
+  const explicit: string[] = [];
   const manifestPath = defPath(hit.folder, "manifest");
   if (manifestPath) {
-    const m = readDefCached<{ stateOrder?: unknown }>(manifestPath);
-    if (Array.isArray(m?.stateOrder)) return m.stateOrder.filter((n): n is string => typeof n === "string");
+    const m = readDefCached<{ stateOrder?: unknown; states?: Record<string, { states?: Record<string, unknown> } | null>; layout?: string }>(manifestPath);
+    // THE TEMPLATE TREE ranks everything by declaration: reaction states (top-level
+    // minus the base) in order, then the base's substates in order — welcome first
+    // because it is declared first. Supersedes an authored stateOrder.
+    if (m?.states && typeof m.states === "object" && !Array.isArray(m.states)) {
+      const names = Object.keys(m.states);
+      const base = names.includes(m.layout ?? "main") ? (m.layout ?? "main") : names[0];
+      return [
+        ...names.filter((n) => n !== base),
+        ...Object.keys((m.states[base] as { states?: Record<string, unknown> } | null)?.states ?? {}),
+      ];
+    }
+    if (Array.isArray(m?.stateOrder)) explicit.push(...m.stateOrder.filter((n): n is string => typeof n === "string"));
   }
-  const rootPath = defPath(hit.folder, lower);
-  if (!rootPath) return [];
-  // Else the envelope: an explicit `stateOrder: [...]`, or derive from where the
-  // Switch references the states ($include order, following layout includes).
-  const rootDef = readDefCached<{ stateOrder?: unknown }>(rootPath);
-  if (Array.isArray(rootDef?.stateOrder)) return rootDef.stateOrder.filter((n): n is string => typeof n === "string");
-  const order: string[] = [];
+  // The structural walk starts at the envelope when one exists; a MANIFEST-ONLY
+  // template (no envelope) starts at its default layout — that is where its
+  // states/ are actually included from (via the shared chrome), so the include
+  // order still ranks the base's substates (welcome before conversation).
+  let rootPath = defPath(hit.folder, lower);
+  if (rootPath) {
+    const rootDef = readDefCached<{ stateOrder?: unknown }>(rootPath);
+    if (!explicit.length && Array.isArray(rootDef?.stateOrder))
+      explicit.push(...rootDef.stateOrder.filter((n): n is string => typeof n === "string"));
+  } else {
+    const dflt = manifestPath ? (readDefCached<{ layout?: string }>(manifestPath).layout ?? "main") : "main";
+    rootPath = defPath(join(hit.folder, "layouts"), dflt);
+  }
+  if (!rootPath) return explicit;
+  const order: string[] = [...explicit];
   const seen = new Set<string>();
   const visited = new Set<string>([rootPath]);
   const walk = (v: unknown): void => {
@@ -856,6 +1031,23 @@ export function listStates(kind: "template" | "component", ref: string): StateEn
         for (const n of names)
           if (n !== dflt && !entries.some((e) => e.name === n)) entries.push({ name: n, where: { field: "defaultState", eq: n } });
       }
+    }
+  }
+  // STATE MODEL v2 (UNOVERSE_STATE_MODEL §5 rule 2): a component with an authored
+  // `state.view` TREE serves its PUBLIC MENU as first-class states — each activated
+  // by the public axis (`view`), in tree order. The tree is the source of truth; this
+  // is its projection, exactly like the states/ folder before it.
+  if (kind === "component") {
+    const rootPath = defPath(hit.folder, parseRef(ref).name.toLowerCase());
+    const tree = rootPath
+      ? (readDefCached<{ state?: { view?: { states?: Record<string, unknown> } } }>(rootPath)?.state?.view)
+      : undefined;
+    if (tree && typeof tree === "object" && tree.states && typeof tree.states === "object") {
+      for (const n of Object.keys(tree.states))
+        if (!entries.some((e) => e.name === n)) entries.push({ name: n, where: { field: "view", eq: n } });
+      const treeOrder = Object.keys(tree.states);
+      const treeRank = (n: string) => { const i = treeOrder.indexOf(n); return i === -1 ? Infinity : i; };
+      return entries.sort((a, b) => treeRank(a.name) - treeRank(b.name) || rank(a.name) - rank(b.name));
     }
   }
   return entries.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));

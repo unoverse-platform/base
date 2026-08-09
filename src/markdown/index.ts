@@ -21,6 +21,7 @@
  *   gaps        what a page still owes
  *   document    a finished document SHAPED for the renderer (areas → tabs, text projection)
  *   partition   divide a finished document into its parts, then derive its layout
+ *   form        a document that COLLECTS: steps, forks, and the slot flattening
  *
  * IN `packages/base` BECAUSE EVERY PRODUCER NEEDS IT: a promoted page, an agent writing
  * mid-conversation, an email, a report. It lived in `server/src/mcp/`, which the engine
@@ -54,3 +55,16 @@ export {
   type PartitionableComponent,
   type StructuredAsk,
 } from "./partition.js";
+export {
+  resolveForm,
+  collectStep,
+  stepGuidance,
+  holds,
+  slotKey,
+  type FormField,
+  type Condition,
+  type Answer,
+  type ResolvedStep,
+  type ResolvedForm,
+  type StepGuidance,
+} from "./form.js";

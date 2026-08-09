@@ -152,6 +152,21 @@ const DOCUMENT_FIELDS: Record<string, Record<string, unknown>> = {
   },
   // `group`, not `area`: it is what `toDocument` reads, what the tab shaping keys on, and
   // what every stored row already carries. The wire format meets the renderer where it is.
+  //
+  // IT WAS DESCRIBED HERE AND NEVER OFFERED. Every branch is `additionalProperties: false`,
+  // so a model could not label a component with its group even though the renderer reads
+  // one, `toDocument` shapes tabs from it and UNOVERSE_MARKDOWN documents it. A document
+  // could therefore never be composed into areas, and a FORM could never be composed into
+  // steps, because a step is a group (verified 2026-08-09).
+  group: {
+    type: "string",
+    description:
+      "The part of the document this component belongs to, in the source's own words: an " +
+      "area of a page, or a STEP of a form ('Who is applying', 'Your commitment'). Two or " +
+      "more groups render as a strip the reader moves through. Empty string when the " +
+      "document is one continuous piece, which is the common case for prose.",
+    maxLength: 40,
+  },
 };
 
 /**

@@ -222,6 +222,43 @@ const layoutAlias = new Map();
     } catch { /* linted on its own */ }
   }
 }
+/**
+ * KEYFRAME DECLS ARE KEBAB-CASE — one spelling, every renderer.
+ *
+ * A keyframe's declaration keys are real CSS property names, and the two serializers
+ * treated their casing differently: Studio's gallery kebab-cased them, the SDK emitted
+ * them verbatim. Today's keyframes only use single-word props (`transform`, `opacity`) so
+ * nobody noticed — but a `boxShadow` would have PLAYED in Studio and silently done nothing
+ * in the app. Both serializers now normalize, and this rule keeps the DATA canonical
+ * anyway: these files are the contract every future renderer (Flutter, RN, iOS) parses,
+ * and one value gets one spelling — the same law the space scale already enforces.
+ */
+for (const home of [DS, ...orgDirs]) {
+  const f = defPath(join(home, "styles", "semantic"), "keyframes");
+  if (!f || !existsSync(f)) continue;
+  let kf;
+  try {
+    // Through `readText`, not straight off disk — Studio lints the file being TYPED
+    // via the overlay, and a rule that bypasses it judges stale content (see options.overlay).
+    kf = parseDef(readText(f), f).keyframes ?? {};
+  } catch {
+    continue; /* a malformed file lints on its own */
+  }
+  for (const [name, entry] of Object.entries(kf)) {
+    if (name.startsWith("$")) continue;
+    for (const [stop, decls] of Object.entries(entry?.$value ?? {})) {
+      if (!decls || typeof decls !== "object") continue;
+      for (const prop of Object.keys(decls))
+        if (/[A-Z_]/.test(prop))
+          report(
+            "error",
+            f,
+            `keyframes.${name}.${stop}: "${prop}" — keyframe declarations use kebab-case CSS property names ("${prop.replace(/_/g, "-").replace(/[A-Z]/g, (m) => "-" + m.toLowerCase())}"). The keyframe files are the one animation contract every renderer parses; one value, one spelling`,
+          );
+    }
+  }
+}
+
 const stepList = () => {
   const all = [...spaceSteps];
   const nums = all.filter((s) => /^\d/.test(s)).sort((a, b) => Number(a) - Number(b));
@@ -337,6 +374,13 @@ const checkToken = (file, where, key, v) => {
       if (named(v[k]) && !LITERAL_VALUES.has(v[k]) && !T.color.has(v[k])) bad(`radial.${k}`, v[k], "color");
     return;
   }
+
+  // `animation` is an OBJECT ({ name, duration?, easing?, iteration? }). The string form
+  // (`animation: kenBurns`) slipped past every rule and rendered `uno-undefined` — the SDK
+  // destructures `.name` from an object and a string has none, so the component named for
+  // its motion had none, silently. A shape the interpreter cannot read is an error here.
+  if (key === "animation" && typeof v === "string")
+    report("error", file, `${where}.animation: "${v}" is a string, but animation is an object — write animation: { name: ${v}, duration: …, easing: … }. The SDK reads .name from an object; a bare string animates NOTHING (renders "uno-undefined")`);
 
   // `animation.name` names a SERVED keyframe; an unknown one animates nothing.
   if (key === "animation" && v && typeof v === "object" && named(v.name) && !T.keyframes.has(v.name))

@@ -86,7 +86,42 @@ function lintFile(file) {
         if (!defPath(join(root, "layouts"), layoutName))
           report("error", file, `manifest.layout "${layoutName}" → layouts/${layoutName} does not exist (and no <name> envelope) (docs/design/05)`);
       }
-      checkStateOrder(json.stateOrder, root, file, /* includeLayouts */ true);
+      // THE TEMPLATE TREE (STATE_MODEL v2, checkpoint 2026-08-08): a manifest
+      // `states:` block declares the whole machine — validate the DECLARATION:
+      //   top-level order is the ladder (base first by convention, named for the
+      //   default layout); every non-base top-level state needs its arrangement
+      //   (layouts/<name>); every base substate needs its state file
+      //   (states/<name>); a name cannot be both; an authored stateOrder is
+      //   superseded and should be deleted.
+      if (json.states !== undefined) {
+        if (!json.states || typeof json.states !== "object" || Array.isArray(json.states)) {
+          report("error", file, `manifest "states" must be an object — the template tree: { <base>: { states: {…} }, <reaction>: {}, … } (STATE_MODEL §5)`);
+        } else {
+          const names = Object.keys(json.states);
+          const base = json.layout ?? "main";
+          if (!names.includes(base))
+            report("error", file, `the template tree must include the BASE state "${base}" (named for the default layout) — the ladder derives as the top level minus it (STATE_MODEL §5)`);
+          const subs = [];
+          for (const [n, s] of Object.entries(json.states)) {
+            if (s !== null && (typeof s !== "object" || Array.isArray(s)))
+              report("error", file, `tree state "${n}" must be an object ({} is a complete state) (STATE_MODEL §5)`);
+            if (n !== base && !defPath(join(root, "layouts"), n) && !defPath(join(root, "states"), n))
+              report("error", file, `tree state "${n}" has no layouts/${n} and no states/${n}. A reaction state needs its drawing — a full arrangement (layouts/) or a STACKED overlay (states/, LAYERS §6) (STATE_MODEL §5)`);
+            const nested = s && typeof s === "object" ? s.states : undefined;
+            if (nested && typeof nested === "object" && !Array.isArray(nested))
+              for (const sub of Object.keys(nested)) {
+                subs.push(sub);
+                if (!defPath(join(root, "states"), sub))
+                  report("error", file, `substate "${sub}" (under "${n}") has no states/${sub} file — a contained substate is a state file the base includes (STATE_MODEL §5)`);
+              }
+          }
+          for (const sub of subs)
+            if (names.includes(sub))
+              report("error", file, `"${sub}" is declared both as a top-level state and a substate — nesting IS containment; a name lives at exactly one level (STATE_MODEL §5)`);
+          if (json.stateOrder !== undefined)
+            report("warn", file, `"stateOrder" is superseded by the "states" tree (the ladder derives from the top level minus the base) — delete it (STATE_MODEL §5)`);
+        }
+      } else checkStateOrder(json.stateOrder, root, file, /* includeLayouts */ true);
       // ONE STATE AT A TIME (docs/design/04): the active state is derived from the
       // latest surfaced VIEW, so no two surfaces in one template may claim the same
       // view — the active surface would be ambiguous.
@@ -96,7 +131,7 @@ function lintFile(file) {
           if (Array.isArray(n)) return n.forEach((c) => collectClaims(c, from));
           if (!n || typeof n !== "object") return;
           const w = n.type === "ComponentSlot" ? n.select?.where : null;
-          if (w?.field === "defaultState" && typeof w.eq === "string") {
+          if ((w?.field === "view" || w?.field === "defaultState") && typeof w.eq === "string") {
             if (claims.has(w.eq))
               report("error", file, `two reaction surfaces claim the view "${w.eq}" (${claims.get(w.eq)} and ${from}). A template is in ONE state at a time; each view has exactly one surface (docs/design/04)`);
             else claims.set(w.eq, from);
@@ -222,29 +257,53 @@ function lintFile(file) {
         if (nonInput.length)
           report("error", file, `microapp props [${nonInput.join(", ")}] are not input:true. Hardcode content in the layout, or move mutable keys into the \`state\` block (docs/design/03)`);
 
+        // STATE MODEL v2 (UNOVERSE_STATE_MODEL §5): an authored `state.view` TREE is
+        // the component's state machine — the ONE object the scalar rule admits.
+        // Well-formed = { initial?: string, states: { <name>: { layout?/layouts?/on?/
+        // initial?/states? } } }. A malformed tree is still an error.
+        const isViewTree = (v) => {
+          if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+          if (v.initial !== undefined && typeof v.initial !== "string") return false;
+          if (!v.states || typeof v.states !== "object" || Array.isArray(v.states)) return false;
+          return Object.values(v.states).every(
+            (s) => s && typeof s === "object" && !Array.isArray(s) &&
+              (s.on === undefined || typeof s.on === "string") &&
+              (s.initial === undefined || typeof s.initial === "string") &&
+              (s.layout === undefined || typeof s.layout === "string"),
+          );
+        };
+        const viewTree = hasStateBlock && isViewTree(json.state.view) ? json.state.view : null;
+
         // the state block holds SCALAR internal view-state ONLY — an array/object (a
         // finder's result rows) or a URL is content/data slop: hardcode it in the layout,
-        // or move workflow-fed data to props (input:true) (AUTHORING §3)
+        // or move workflow-fed data to props (input:true) (AUTHORING §3). The one
+        // exception: a well-formed v2 `state.view` tree (STATE_MODEL §5 rule 1).
         if (hasStateBlock)
           for (const [k, v] of Object.entries(json.state)) {
+            if (k === "view" && viewTree) continue;
             if (Array.isArray(v) || (v && typeof v === "object"))
-              report("error", file, `state.${k} is an ${Array.isArray(v) ? "array" : "object"}. The state block is SCALAR view-state only; workflow-fed data → props (input:true), static content → hardcode in the layout (docs/design/03)`);
+              report("error", file, `state.${k} is an ${Array.isArray(v) ? "array" : "object"}. The state block is SCALAR view-state only (the one object allowed is a well-formed v2 \`state.view\` tree); workflow-fed data → props (input:true), static content → hardcode in the layout (docs/design/03)`);
             else if (typeof v === "string" && /^https?:\/\//.test(v))
               report("error", file, `state.${k} is a URL. Content, not view-state; hardcode it in the layout (or props input:true if workflow-fed) (docs/design/03)`);
           }
 
         if (hasLayouts) {
           const raw = JSON.stringify(json.root ?? {}).replace(/\s/g, "");
-          if (!raw.includes('"on":"defaultState"') || !/"\$include":"layouts\//.test(raw))
-            report("error", file, `a faced component's root must Switch on defaultState → $include layouts/<state> (the layout filename = the state name, e.g. layouts/inline) (docs/design/03)`);
+          if (viewTree) {
+            // v2: the tree owns the states; the root switches the PUBLIC axis (`view`).
+            if (!raw.includes('"on":"view"') || !/"\$include":"layouts\//.test(raw))
+              report("error", file, `a v2 component (state.view tree) must root-Switch on "view" → $include layouts/<layout> (each state owns its layout; same-name by convention) (STATE_MODEL §5)`);
+          } else if (!raw.includes('"on":"defaultState"') || !/"\$include":"layouts\//.test(raw))
+            report("error", file, `a faced component's root must Switch on defaultState → $include layouts/<state> (legacy; or declare a v2 state.view tree and Switch on "view") (docs/design/03)`);
 
           // ── face set ⇄ layouts/ cross-check (OPEN name set — inline/focused/<any>) ──
           // The FACES are the root Switch's cases; Studio's face toggle and the render
           // path both derive from them, so cases and layout files must agree exactly.
+          const axis = viewTree ? "view" : "defaultState";
           const findFaceSwitch = (n) => {
             if (!n || typeof n !== "object") return null;
             if (Array.isArray(n)) { for (const c of n) { const r = findFaceSwitch(c); if (r) return r; } return null; }
-            if (n.type === "Switch" && n.on === "defaultState" && n.cases && typeof n.cases === "object") return n;
+            if (n.type === "Switch" && n.on === axis && n.cases && typeof n.cases === "object") return n;
             for (const v of Object.values(n)) { const r = findFaceSwitch(v); if (r) return r; }
             return null;
           };
@@ -260,14 +319,19 @@ function lintFile(file) {
             // rail card retired by a new turn). Then omitting inline/default is the
             // point, not a mistake.
             if (!caseNames.includes("inline") && cases.default === undefined) {
+              // v2: the tree's `initial` IS the declared base — the component always
+              // has somewhere to rest, so no inline/default case is required as long
+              // as the initial names a real case.
+              const treeInitial = viewTree ? (viewTree.initial ?? Object.keys(viewTree.states)[0]) : undefined;
               let arrival;
               try {
                 const mp = defPath(root, "manifest");
                 if (mp) arrival = readDef(mp).defaultState;
               } catch { /* linted separately */ }
               const surfaceOnly = typeof arrival === "string" && arrival !== "inline" && caseNames.includes(arrival);
-              if (!surfaceOnly)
-                report("error", file, `faced component's Switch has no "inline" case and no "default". Inline is the universal default face; a component with neither disappears for unknown states. (Intentional surface-only component? Declare a surfaced arrival: manifest.defaultState naming one of its cases.) (STATE_MODEL §5b)`);
+              const v2Based = typeof treeInitial === "string" && caseNames.includes(treeInitial);
+              if (!surfaceOnly && !v2Based)
+                report("error", file, `faced component's Switch has no "inline" case and no "default". Inline is the universal default face; a component with neither disappears for unknown states. (v2: the state.view tree's \`initial\` naming a case also satisfies this; legacy surface-only: manifest.defaultState naming one of its cases.) (STATE_MODEL §5)`);
             }
             // Each named case's layout include must MATCH the case name — the layout
             // filename IS the state name (Studio writes defaultState=<case>).
@@ -277,8 +341,27 @@ function lintFile(file) {
               if (typeof inc !== "string" || !inc.startsWith("layouts/")) continue;
               const layoutName = inc.slice("layouts/".length);
               usedLayouts.add(layoutName);
-              if (name !== "default" && layoutName !== name)
-                report("error", file, `face case "${name}" includes layouts/${layoutName}. The layout FILENAME is the state name; rename one so they match (docs/design/03)`);
+              // v2: the STATE owns its layout — the tree's declaration decides which
+              // file draws it (same-name by default). Legacy: same-name is the law.
+              const expected = viewTree?.states?.[name]?.layout ?? name;
+              if (name !== "default" && layoutName !== expected)
+                report("error", file, viewTree
+                  ? `state "${name}" declares layout "${expected}" but its case includes layouts/${layoutName} — the tree's declaration and the case must agree (STATE_MODEL §5 rule 1)`
+                  : `face case "${name}" includes layouts/${layoutName}. The layout FILENAME is the state name; rename one so they match (docs/design/03)`);
+            }
+            // v2: tree-declared layouts (including nested substates' and variants') are
+            // reachable by declaration — seed them so the orphan check knows them.
+            if (viewTree) {
+              const seed = (states) => {
+                for (const s of Object.values(states ?? {})) {
+                  if (!s || typeof s !== "object") continue;
+                  if (typeof s.layout === "string") usedLayouts.add(s.layout);
+                  if (s.layouts && typeof s.layouts === "object")
+                    for (const l of Object.values(s.layouts)) if (typeof l === "string") usedLayouts.add(l);
+                  if (s.states) seed(s.states);
+                }
+              };
+              seed(viewTree.states);
             }
             // Orphan faces: a layouts/*.json no case references is invisible — Studio's
             // face toggle and the renderer only know the Switch's cases.
@@ -315,6 +398,21 @@ function lintFile(file) {
                   report("warn", file, `layouts/${lf} is not referenced by any Switch case. An orphan face is unreachable (add a case "${lname}" or delete the file) (docs/design/03)`);
               }
           }
+          // v2 STRAGGLER NUDGE: inside a component that declares a tree, every
+          // public-axis write must use `view` — a leftover setValue on
+          // "defaultState" still works through the alias but dies with it.
+          if (viewTree) {
+            for (const sub of ["layouts", "components"]) {
+              const d = join(root, sub);
+              if (!existsSync(d)) continue;
+              for (const lf of readdirSync(d).filter(isDefFile)) {
+                try {
+                  if (/"key":"defaultState"/.test(JSON.stringify(readDef(join(d, lf)))))
+                    report("warn", file, `${sub}/${lf} writes setValue "defaultState" but this component declares a v2 tree — write "view" (the alias is scheduled for deletion) (STATE_MODEL §2)`);
+                } catch { /* that file lints separately */ }
+              }
+            }
+          }
           // arrival state: the manifest is the render-contract home (default "inline"); the
           // state block is the legacy fallback.
           let mDefault;
@@ -322,9 +420,11 @@ function lintFile(file) {
             const mp = defPath(root, "manifest");
             if (mp) mDefault = readDef(mp).defaultState;
           } catch { /* linted separately */ }
-          const arrival = mDefault ?? (hasStateBlock ? json.state.defaultState : undefined);
+          const arrival = viewTree
+            ? (viewTree.initial ?? Object.keys(viewTree.states)[0])
+            : (mDefault ?? (hasStateBlock ? json.state.defaultState : undefined));
           if (typeof arrival !== "string")
-            report("error", file, `a faced component must declare its arrival state in manifest.defaultState (the render contract) or state.defaultState (docs/design/03)`);
+            report("error", file, `a faced component must declare its base state — a v2 state.view tree \`initial\`, or (legacy) manifest.defaultState / state.defaultState (docs/design/03)`);
         }
         if (stateFiles.length) {
           const order = Array.isArray(json.stateOrder) ? [...json.stateOrder].sort() : null;

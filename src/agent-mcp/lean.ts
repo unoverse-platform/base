@@ -75,6 +75,10 @@ export function leanToolResultForModel(resultContent: string): string {
           ...(typeof r.similarity === "number" ? { similarity: r.similarity } : {}),
           ...(typeof r.distance === "number" ? { distance: r.distance } : {}),
           source_url: r.source_url,
+          // The standard source identity (migration 021) — lets the model (and anyone
+          // reading the trace) scope follow-ups to ONE source ("only this doc's needs").
+          // 12 chars: cheaper than the URL it complements.
+          ...(r.source_id ? { source_id: r.source_id } : {}),
           hasImage,
           ...(Object.keys(meta).length ? { metadata: meta } : {}),
         };
