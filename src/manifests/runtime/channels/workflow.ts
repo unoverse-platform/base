@@ -187,7 +187,7 @@ async function runApi(
 
 /**
  * `publish` — A GENERIC WRITE INTO THE CALLER'S TEMPLATE STATE, the workflow channel's
- * sibling of the service channel's `renderCards`: both reach the person watching rather
+ * sibling of the service channel's `renderComponents`: both reach the person watching rather
  * than answer the graph, and both no-op when nobody is (builder, tests, headless, cron).
  *
  * AFTER the emitter settles, over `output`, deliberately: the pushed value derives from what

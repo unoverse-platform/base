@@ -13,13 +13,13 @@
  *
  * THIS FILE IS THE PUBLIC SURFACE and nothing else. The harness was one 823-line module;
  * it is now split by JOB, the same way `manifests/runtime/` is, so a reader looking for how
- * a turn ends is not scrolling past content-card rendering to find it.
+ * a turn ends is not scrolling past row-component rendering to find it.
  *
  *   types       the shapes, no behaviour
  *   memo        search once per conversation
  *   handoff     does this call end the turn?
  *   discovery   what spatial found, and what it unlocks
- *   cards       content rows, rendered rather than described
+ *   rowComponents  rows that name a component, rendered rather than described
  *   lean        projecting a result down to what the model needs
  *   tools       minting a model tool from a discovered app
  *   invoke      THE ONE WIRE CALL, where our code ends and native MCP begins
@@ -29,7 +29,7 @@
 export type {
   AgentToolExchange,
   DiscoveredMCP,
-  ContentCard,
+  RowComponent,
   AgentToolDef,
   AppInvocationContext,
 } from "./types.js";
@@ -37,7 +37,7 @@ export type {
 export { DISCOVERY_TOOL_NAMES, parseDiscoveredMCPs, handleDiscoveryResult, anchorSearchArgs } from "./discovery.js";
 export { searchOncePerConversation } from "./memo.js";
 export { parseToolResult, hasDynamicHandoff, isTurnEndingHandoff } from "./handoff.js";
-export { contentCardsFromResults, renderContentCards } from "./cards.js";
+export { rowComponentsFromResults, renderRowComponents } from "./rowComponents.js";
 export { leanToolResultForModel } from "./lean.js";
 export { toolDefFromDiscoveredMCP, resolveToolDefNative, isBindinglessComponentApp, componentAppInvoker } from "./tools.js";
 export { invokeComponentAppNative } from "./invoke.js";

@@ -11,7 +11,7 @@ import type { AgentToolExchange, DiscoveredMCP, AppInvocationContext } from "./t
 export const DISCOVERY_TOOL_NAMES: readonly string[] = ["findIntent", "discoverRelated"];
 
 import { parseToolResult } from "./handoff.js";
-import { contentCardsFromResults, renderContentCards, componentTypeFromAppUri } from "./cards.js";
+import { rowComponentsFromResults, renderRowComponents, componentTypeFromAppUri } from "./rowComponents.js";
 import { isBindinglessComponentApp } from "./tools.js";
 import { invokeComponentAppNative } from "./invoke.js";
 import { leanToolResultForModel } from "./lean.js";
@@ -116,7 +116,7 @@ export function parseDiscoveredMCPs(calls: AgentToolExchange[]): DiscoveredMCP[]
   return discovered;
 }
 
-/** A content-tree row's attached card, ready to render — see parseContentCards. */
+/** A content-tree row's attached card, ready to render — see parseRowComponents. */
 
 /**
  * THE ONE DISCOVERY ABSORBER — what EVERY agent family does with a discovery tool's

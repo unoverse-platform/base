@@ -1,6 +1,6 @@
 /**
  * THE PUBLISH LANE: api/publish.yaml, a generic write into the caller's template state —
- * the workflow channel's sibling of the service channel's renderCards.
+ * the workflow channel's sibling of the service channel's renderComponents.
  *
  * Asserted on BEHAVIOUR against a captured clientTransport, because every failure mode here
  * is silent by design: the lane no-ops with no session, no-ops on a non-object, and no-ops

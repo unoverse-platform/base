@@ -11,7 +11,7 @@ import type { RunContext } from "../context.js";
 import { evaluate } from "../templating.js";
 import { runCalls } from "../http/request.js";
 import type { StateStore } from "../state.js";
-import { contentCardsFromResults, renderContentCards } from "../../../agent-mcp/cards.js";
+import { rowComponentsFromResults, renderRowComponents } from "../../../agent-mcp/rowComponents.js";
 import { withHelpers } from "../helpers.js";
 
 /**
@@ -74,39 +74,39 @@ async function serviceMethod(
    *
    * BEFORE `returns`, and that ordering is the whole reason this lives here rather than in
    * the executor: `returns` is where a node projects its reply down to what a model should
-   * read, and a card needs the FULL row (the component uri, the images, the authored copy)
-   * that the projection strips. Rendering after it would draw cards from data that no longer
-   * has what a card is made of.
+   * read, and a render needs the FULL row (the component uri, the images, the authored copy)
+   * that the projection strips. Rendering after it would draw from data that no longer has
+   * what the component is made of.
    *
    * DATA-DRIVEN, never a model tool: a row that carries a component renders it the moment it
    * surfaces, so the model cannot forget to show it, describe one that is not there, or
    * decide not to bother. No prompt is involved anywhere.
    *
-   * Fire-and-forget and deliberately not awaited: a card is a side channel to a screen, and
+   * Fire-and-forget and deliberately not awaited: this is a side channel to a screen, and
    * a slow render must not hold up the answer the caller is waiting on. With no live session
-   * (builder, tests, headless) `renderContentCards` no-ops on the missing userId, so a
+   * (builder, tests, headless) `renderRowComponents` no-ops on the missing userId, so a
    * manifest declaring this stays pure everywhere it is not wanted, with no flag to juggle.
    */
-  if (spec.renderCards) {
-    const rows = await evaluate(spec.renderCards, { response: last, calls: results, params, config: ctx.config });
-    const cards = contentCardsFromResults(rows);
+  if (spec.renderComponents) {
+    const rows = await evaluate(spec.renderComponents, { response: last, calls: results, params, config: ctx.config });
+    const found = rowComponentsFromResults(rows);
     /**
      * SAY WHAT HAPPENED, always. This lane no-ops in three different ways — no rows carry a
-     * component, no live session, or a card already rendered this conversation — and it
+     * component, no live session, or a row already rendered this conversation — and it
      * originally shipped with no logging at all, so all four outcomes looked identical from
-     * outside: silence. Hours went into asking "are the cards broken?" with nothing to read.
+     * outside: silence. Hours went into asking "is rendering broken?" with nothing to read.
      *
-     * `renderContentCards` logs its own success through the callback; this covers the cases
+     * `renderRowComponents` logs its own success through the callback; this covers the cases
      * where it is never reached.
      */
-    if (!cards.length) {
+    if (!found.length) {
       const n = Array.isArray(rows) ? rows.length : 0;
-      console.log(`[manifests] ${node.type}: no content cards in ${n} row(s) — none carry metadata.app`);
+      console.log(`[manifests] ${node.type}: no row components in ${n} row(s) — none carry metadata.app`);
     } else if (!session?.userId) {
-      console.log(`[manifests] ${node.type}: ${cards.length} content card(s) not rendered — no live session on this run`);
+      console.log(`[manifests] ${node.type}: ${found.length} row component(s) not rendered — no live session on this run`);
     }
-    renderContentCards(
-      cards,
+    renderRowComponents(
+      found,
       {
         userId: session?.userId,
         conversationId: session?.conversationId,

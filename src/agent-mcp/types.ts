@@ -115,8 +115,8 @@ export interface AppInvocationContext {
 /** Open an MCP client on the platform's internal `/mcp` — the ONE wire-connect shared by
  *  every native call this harness makes (app invocation, live schema read). */
 
-/** A content-tree row's attached card, ready to render — see parseContentCards. */
-export interface ContentCard {
+/** A content-tree row's attached COMPONENT, ready to render — see rowComponentsFromResults. */
+export interface RowComponent {
   /** The row's identity — dedupe key (one render per row, ever). */
   id: string;
   /** The component app-tool id (`unoverse://components/<id>` → `<id>`). */
