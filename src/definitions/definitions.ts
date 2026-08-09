@@ -238,6 +238,10 @@ export interface UnoverseDefinition {
    *  names of the authored `state.view` tree, compiled at serve time. What hosts may
    *  place at spawn and templates may react to; nested substates never appear here. */
   publicStates?: string[];
+  /** REFERENCE, DON'T COPY: the shared pieces this definition NAMES rather than carries,
+   *  by ref name. Present only on the referenced form (`referencedDefinition`), which a
+   *  client asks for explicitly; the default form still inlines every Ref. */
+  defs?: Record<string, unknown>;
   /** COMPONENTS (STATE_MODEL v2): the view tree's declared initial — the base the
    *  client retracts to and the fallback when no host placement matches. */
   initialView?: string;
@@ -421,6 +425,147 @@ function expandRefs(def: UnoverseDefinition): UnoverseDefinition {
   return def;
 }
 
+/**
+ * REFERENCE, DON'T COPY — the same definition with its `Ref` nodes LEFT ALONE, plus one
+ * copy of each atom they name, in `defs`.
+ *
+ * `expandRefs` above specialises every Ref into an inline copy, which is why a shared
+ * button travels inside every definition that uses it, and again on every page load
+ * (MCP reads go over POST, so no browser cache holds them). Measured across the estate
+ * when this landed: 1259 KB served against 224 KB of distinct structure, and
+ * sab/product-card at 361 KB because it referenced a document carrying six copies of an
+ * eleven-branch field switch.
+ *
+ * A Ref is a pure function of the atom and its own parameters, so the client can do the
+ * specialisation (web/sdk core/refs.ts, proven byte-identical to `expandNode` by
+ * server/tests/sdk/ref-resolution.test.ts). What travels is the reference plus the atom,
+ * once, and the client caches the atom by name for every later definition that names it.
+ *
+ * OPT-IN, and that is deliberate: a client that cannot resolve a Ref renders nothing where
+ * one appears. Callers ask for this form explicitly, so anything that has not been updated
+ * keeps receiving fully inlined trees and cannot be broken by a server upgrade.
+ */
+export function referencedDefinition(def: UnoverseDefinition): UnoverseDefinition {
+  const defs: Record<string, AnyNode> = {};
+  // Depth-first over the tree, collecting each named atom ONCE. An atom may itself Ref
+  // another, so collected atoms are walked too — otherwise the client resolves an atom
+  // and finds a reference it was never sent.
+  const collect = (node: AnyNode | undefined): void => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) return node.forEach(collect);
+    if (node.type === "Ref" && typeof node.ref === "string") {
+      const name = node.ref;
+      if (!(name in defs)) {
+        // The referenced piece in its OWN referenced form, with its references merged up
+        // into the same flat map. The client threads `defs` through every recursion, so a
+        // Ref inside a referenced piece resolves against the same map. Storing these
+        // EXPANDED instead was the difference between product-card costing 17 KB + 173 KB
+        // and 17 KB + a handful: it references `document`, and an expanded document drags
+        // in every copy this exists to remove.
+        const piece = loadDefinition(name, "atom", "referenced") ?? loadDefinition(name, "component", "referenced");
+        if (piece?.root) {
+          defs[name] = piece.root as AnyNode;
+          for (const [k, v] of Object.entries((piece.defs ?? {}) as Record<string, AnyNode>)) if (!(k in defs)) defs[k] = v;
+          collect(piece.root as AnyNode);
+        }
+      }
+    }
+    if (Array.isArray(node.children)) node.children.forEach(collect);
+    if (node.template) collect(node.template as AnyNode);
+    if (node.cases && typeof node.cases === "object") for (const k of Object.keys(node.cases)) collect(node.cases[k] as AnyNode);
+    if (node.frame) collect(node.frame as AnyNode);
+    if (node.fallback) collect(node.fallback as AnyNode);
+  };
+  // EVERY TREE THE DEFINITION SHIPS, not just `root`. A template's arrangements live in
+  // `layouts`, and they are the whole payload — a chat template's `root` is a stub. Walking
+  // `root` alone deduplicated nothing at all for templates: measured on bpp-chat-layout,
+  // whose four layouts include the SAME 7 KB chrome file, the referenced form came back 11%
+  // smaller instead of the ~70% every component saw.
+  const trees = () => [def.root, ...Object.values(def.layouts ?? {})] as AnyNode[];
+  trees().forEach(collect);
+
+  // REPEATS ARE REFERENCES TOO, wherever they came from.
+  //
+  // Hoisting named atoms only fixes duplication that went through a `Ref`. A template
+  // composes its arrangements with `$include`, which is copied just as literally: a chat
+  // layout shipping four arrangements carried four copies of the same chrome, 35 KB of a
+  // 44 KB payload, and not one byte of it was an atom.
+  //
+  // So this is structural: any subtree appearing more than once becomes ONE entry plus
+  // references to it. Identical trees render identically, and the client resolves a
+  // parameterless reference by cloning, so nothing about meaning changes. Counted ACROSS
+  // the trees, because the repetition that matters most is one arrangement against another.
+  const hoisted = hoistRepeats(trees(), defs);
+  if (hoisted.length) {
+    const [root, ...layouts] = hoisted;
+    def = { ...def, root };
+    if (def.layouts) def.layouts = Object.fromEntries(Object.keys(def.layouts).map((k, i) => [k, layouts[i]]));
+  }
+
+  return Object.keys(defs).length ? ({ ...def, defs } as UnoverseDefinition) : def;
+}
+
+/**
+ * Replace every repeated subtree, across ALL of a definition's trees, with a reference to
+ * one copy. Returns the rewritten trees in the order given.
+ *
+ * Counting spans the whole set rather than each tree alone, because the duplication that
+ * dominates a template is one ARRANGEMENT against another: four layouts that each include
+ * the same chrome share nothing within themselves and everything between themselves.
+ *
+ * Top-down, so the LARGEST repeated tree is hoisted and its children ride inside it rather
+ * than being hoisted separately: hoisting a child first would leave the parent's copies
+ * differing only in that child's reference, and they would stop matching each other.
+ *
+ * `MIN` exists because a reference costs about 40 bytes; hoisting a 60-byte node makes the
+ * payload bigger and the tree harder to read for nothing.
+ */
+function hoistRepeats(roots: AnyNode[], defs: Record<string, AnyNode>): AnyNode[] {
+  const MIN = 700; // bytes: comfortably larger than the reference that replaces it
+  const counts = new Map<string, number>();
+  const count = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(count);
+    if (!node || typeof node !== "object") return;
+    const n = node as AnyNode;
+    if (n.type && n.type !== "Ref") {
+      const j = JSON.stringify(n);
+      if (j.length >= MIN) counts.set(j, (counts.get(j) ?? 0) + 1);
+    }
+    for (const v of Object.values(n)) if (v && typeof v === "object") count(v);
+  };
+  roots.forEach(count);
+
+  const repeated = new Map<string, string>(); // serialized tree → its reference name
+  let i = 0;
+  for (const [j, n] of counts) if (n > 1) repeated.set(j, `shared:${(i++).toString(36)}`);
+  if (!repeated.size) return [];
+
+  const swap = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(swap);
+    if (!node || typeof node !== "object") return node;
+    const n = node as AnyNode;
+    if (n.type && n.type !== "Ref") {
+      const name = repeated.get(JSON.stringify(n));
+      if (name) {
+        // The first sighting becomes the stored copy, with ITS OWN repeats hoisted, so a
+        // shape repeated inside a repeated shape collapses too.
+        if (!(name in defs)) {
+          const stored = JSON.parse(JSON.stringify(n)) as AnyNode;
+          defs[name] = stored;
+          for (const [k, v] of Object.entries(stored)) if (v && typeof v === "object") stored[k] = swap(v) as AnyNode;
+        }
+        return { type: "Ref", ref: name };
+      }
+    }
+    for (const [k, v] of Object.entries(n)) if (v && typeof v === "object") n[k] = swap(v) as AnyNode;
+    return n;
+  };
+  // A whole tree can itself be a repeat (two arrangements that are the same), so the
+  // returned value is used rather than relying on in-place rewriting.
+  return roots.map((r) => swap(r) as AnyNode);
+}
+
+
 // ---- Folder composition: inline `{ "$include": "name" }` from sibling files ----
 //
 // A template can be a FOLDER (templates/chatlayout/) of multiple data files, so
@@ -456,7 +601,16 @@ function composeIncludes(value: any, folderDir: string): any {
  *  atom). Edit-and-refresh still works — an mtime moves, the signature changes, the
  *  def re-expands. Returned objects are SHARED: callers must treat them as read-only
  *  (all current consumers stringify or shallow-spread). */
-export function loadDefinition(ref: string, kind?: "component" | "template" | "atom"): UnoverseDefinition | null {
+export function loadDefinition(
+  ref: string,
+  kind?: "component" | "template" | "atom",
+  /** "referenced" keeps `Ref` nodes and ships each named atom once in `defs`, for clients
+   *  that resolve references themselves. Default inlines every Ref, as it always has. */
+  mode: "expanded" | "referenced" = "expanded",
+): UnoverseDefinition | null {
+  // The two forms are memoized separately: same inputs, different output.
+  const form = (d: UnoverseDefinition) => (mode === "referenced" ? referencedDefinition(d) : expandRefs(d));
+  const suffix = mode === "referenced" ? ":ref" : "";
   // Default lookup is for SERVED kinds only (component/template). Atoms are
   // internal — load them explicitly with kind: "atom" from the composition resolver.
   const kinds: ("component" | "template" | "atom")[] = kind ? [kind] : ["component", "template"];
@@ -484,10 +638,10 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
         // expanding, because the parsed object is shared and expansion mutates in place.
         if (k === "atom") {
           const sig = `${path}:${statSync(path).mtimeMs};${dirSignature([SHARED_DIR.atom])}`;
-          return cachedBySignature(`def:atom:${lower}`, sig, () => expandRefs(structuredClone(raw)));
+          return cachedBySignature(`def:atom:${lower}${suffix}`, sig, () => form(structuredClone(raw)));
         }
         const sig = `${path}:${statSync(path).mtimeMs};${dirSignature([SHARED_DIR.atom, SHARED_DIR.component])}`;
-        return cachedBySignature(`def:${k}:${org ?? ""}:${lower}`, sig, () => ({ ...expandRefs(structuredClone(raw)), ...(org ? { org } : {}) }));
+        return cachedBySignature(`def:${k}:${org ?? ""}:${lower}${suffix}`, sig, () => ({ ...form(structuredClone(raw)), ...(org ? { org } : {}) }));
       }
       // Folder form: <name>/<name>.{yaml,json} (+ $include sibling files, states/, …).
       // A TEMPLATE folder needs no envelope at all: the manifest IS the metadata and
@@ -499,7 +653,7 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
       const manifestOnly = k === "template" && !entry && !!manifestPath;
       if (entry || manifestOnly) {
         const sig = `${dirSignature([folderDir])};${dirSignature([SHARED_DIR.atom, SHARED_DIR.component])}`;
-        return cachedBySignature(`def:${k}:${org ?? ""}:${lower}`, sig, () => {
+        return cachedBySignature(`def:${k}:${org ?? ""}:${lower}${suffix}`, sig, () => {
           const def: UnoverseDefinition = manifestOnly
             ? (() => {
                 // manifestOnly is only true when manifestPath resolved.
@@ -665,7 +819,7 @@ export function loadDefinition(ref: string, kind?: "component" | "template" | "a
               def.state = flat;
             }
           }
-          return k === "atom" ? def : expandRefs(def);
+          return k === "atom" ? def : form(def);
         });
       }
     }
