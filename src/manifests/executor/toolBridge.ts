@@ -62,6 +62,8 @@ export async function toolBridgeFor(executionContext: any): Promise<ToolBridge |
    */
   const discoveredApps = new Set<string>();
 
+  const stringify = (r: unknown): string => (typeof r === "string" ? r : JSON.stringify(r));
+
   return {
     async discover() {
       return Object.entries<any>(schema.methods).map(([name, m]) => ({
@@ -73,8 +75,14 @@ export async function toolBridgeFor(executionContext: any): Promise<ToolBridge |
 
     async call(name, args) {
       const app = appInvokers.get(name);
-      const result = app ? await app(args) : await api.callService(name, args, executionContext);
-      return typeof result === "string" ? result : JSON.stringify(result);
+      if (app) return stringify(await app(args));
+      // A CONVERSATION SEARCHES A THING ONCE. Exact repeats are removed here rather than
+      // asked for in the tool description, because asking did not hold. Discovery tools
+      // only, exact matches only, and never down to an empty search.
+      const sent = harness.dropRepeatedQueries(identity.conversationId, name, args, (m: string) =>
+        console.log(`[manifests] ${m}`),
+      );
+      return stringify(await api.callService(name, sent, executionContext));
     },
 
     /**

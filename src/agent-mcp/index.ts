@@ -35,7 +35,7 @@ export type {
 } from "./types.js";
 
 export { DISCOVERY_TOOL_NAMES, parseDiscoveredMCPs, handleDiscoveryResult } from "./discovery.js";
-export { searchOncePerConversation } from "./memo.js";
+export { searchOncePerConversation, dropRepeatedQueries } from "./memo.js";
 export { parseToolResult, hasDynamicHandoff, isTurnEndingHandoff } from "./handoff.js";
 export { rowComponentsFromResults, renderRowComponents } from "./rowComponents.js";
 export { leanToolResultForModel } from "./lean.js";
