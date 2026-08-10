@@ -13,7 +13,6 @@ export const DISCOVERY_TOOL_NAMES: readonly string[] = ["findIntent", "discoverR
 import { parseToolResult } from "./handoff.js";
 import { rowComponentsFromResults, renderRowComponents, componentTypeFromAppUri } from "./rowComponents.js";
 import { isBindinglessComponentApp } from "./tools.js";
-import { invokeComponentAppNative } from "./invoke.js";
 import { leanToolResultForModel } from "./lean.js";
 
 /**
@@ -124,13 +123,20 @@ export function parseDiscoveredMCPs(calls: AgentToolExchange[]): DiscoveredMCP[]
  *   1. UNLOCK: each discovered component app's tool joins `discoveredApps` — the set a
  *      native MCP attachment's `toolFilter` reads, so the app appears in the model's
  *      next `tools/list` (spatial selects; MCP serves).
- *   2. SHELL-OPEN (fire-and-forget): one empty native call per newly discovered app —
- *      the server renders the page SKELETON immediately, so the guest sees the page
- *      exist seconds in and watches it hydrate, never a blank panel while the model
- *      composes.
- *   3. LEAN: returns the model-facing projection of the rows (full cargo was already
+ *   2. LEAN: returns the model-facing projection of the rows (full cargo was already
  *      consumed by the card lane and this unlock pass; raw rows cost ~100k tokens).
  * Non-discovery results pass through untouched.
+ *
+ * DISCOVERY NEVER CALLS THE APP. Finding a component in search results is not someone
+ * asking for it; only the model's own tool call is. Two fire-and-forget calls lived here
+ * (a shell-open on unlock, a draft top-up when a later search carried images) to paint a
+ * composed page's frame early. Both were `invokeComponentAppNative`, so on an app whose
+ * component declares `outputs` each one rendered the component AND opened its own
+ * elicitation: observed live 2026-08-10, three renders and three concurrent forms in ONE
+ * turn, of which the channel can hold only one (connection.tsx keeps a single pending
+ * resolver). Native MCP is one call, one render, one elicitation, answers back to the
+ * model (MCP_TEMPLATE_PROTOCOL §3.3). An early frame, if wanted again, cannot be an app
+ * invocation.
  *
  * `onAppUnlocked` — fired ONCE per newly-unlocked path-B app, and AWAITED before the lean
  * result returns. A family that mints its own SDK tool per app (rather than exposing them
@@ -146,130 +152,14 @@ export async function handleDiscoveryResult(
   onAppUnlocked?: (mcp: DiscoveredMCP) => Promise<void> | void,
 ): Promise<string> {
   if (!DISCOVERY_TOOL_NAMES.includes(toolName)) return resultContent;
-  // DRAFT MATERIAL for the shell-open: the search that unlocked the app already
-  // returned RANKED, image-carrying content rows for the guest's desire. Their ids
-  // ride the shell call so the server can draft every zero-authoring part (hero
-  // image, ref-only galleries) IMMEDIATELY — real content on screen seconds in,
-  // no waiting on the model's compose. The model's later calls merge over it.
-  let draftRefs: string[] = [];
-  try {
-    const parsed = parseToolResult(resultContent);
-    const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.results) ? parsed.results : [];
-    draftRefs = rows
-      .filter((r: any) => {
-        if (r?.object_type === "mcp" || r?.object_type === "skill") return false;
-        // LEAN rows (the node's projection) carry `hasImage`; raw rows carry metadata.
-        if (r?.hasImage === true) return true;
-        const md = r?.metadata ?? {};
-        return Boolean(
-          (typeof md.primaryImage === "string" && md.primaryImage) ||
-            (Array.isArray(md.images) && md.images.length) ||
-            r?.object_type === "image",
-        );
-      })
-      .map((r: any) => String(r.universal_id || ""))
-      .filter(Boolean)
-      .slice(0, 8);
-  } catch {}
   for (const mcp of parseDiscoveredMCPs([{ name: toolName, resultContent }])) {
     if (isBindinglessComponentApp(mcp) && mcp.component && !discoveredApps.has(mcp.component)) {
       discoveredApps.add(mcp.component);
       log?.(`🔓 App tool unlocked: ${mcp.component}`);
-      if (identity.userId && identity.conversationId) {
-        if (draftRefs.length) draftSeededFor(discoveredApps).add(mcp.component);
-        invokeComponentAppNative(mcp.component, {
-          ...identity,
-          message: "",
-          ...(draftRefs.length ? { props: { __draftRefs: draftRefs } } : {}),
-        }).catch((e: any) => log?.(`shell-open failed for ${mcp.component}: ${e?.message ?? e}`));
-      }
       if (onAppUnlocked) await onAppUnlocked(mcp);
     }
   }
-  // DRAFT TOP-UP: the UNLOCKING search may carry no image rows (observed live: a
-  // hotels-neighborhood discovery — hasImage false across the board), leaving the
-  // draft with nothing to paint. Seed it from the FIRST discovery result that DOES
-  // carry image rows, whichever search that is. Once per app per run; the server
-  // ignores the draft anyway once the model has composed (held page exists).
-  if (draftRefs.length && identity.userId && identity.conversationId) {
-    const seeded = draftSeededFor(discoveredApps);
-    for (const component of discoveredApps) {
-      if (seeded.has(component)) continue;
-      seeded.add(component);
-      log?.(`🎨 Draft top-up for ${component} (${draftRefs.length} image rows)`);
-      invokeComponentAppNative(component, { ...identity, message: "", props: { __draftRefs: draftRefs } }).catch(
-        (e: any) => log?.(`draft top-up failed for ${component}: ${e?.message ?? e}`),
-      );
-    }
-  }
   return leanToolResultForModel(resultContent);
-}
-
-// Which apps already received their draft, per run — keyed off the run's own
-// discoveredApps set so no signature changes ripple through the families.
-const draftSeededByRun = new WeakMap<Set<string>, Set<string>>();
-function draftSeededFor(discoveredApps: Set<string>): Set<string> {
-  let s = draftSeededByRun.get(discoveredApps);
-  if (!s) {
-    s = new Set();
-    draftSeededByRun.set(discoveredApps, s);
-  }
-  return s;
-}
-
-/**
- * ASK-INTEGRITY ANCHOR — the guest's faithful ask ALWAYS searches.
- *
- * The query is the ROUTING signal, not just a content search: app rows are indexed
- * on utterance-shaped `whenToUse` text written to meet real asks in embedding space.
- * A compressed ("career goals") or memory-stuffed paraphrase misses that handshake
- * and the wrong app (or none) unlocks — observed live, both directions. Prose asked
- * the model to preserve the ask; this makes it structural: for discovery-tool calls,
- * the turn's raw ask is prepended as the first query and the model's own queries
- * ride alongside as additional angles. The model still decides WHEN to search, which
- * MODE, and what facets to add — only preservation is enforced.
- *
- * Skipped for trivial asks (< 15 chars — "yes", "thanks" would anchor junk).
- */
-
-/**
- * ASK-INTEGRITY ANCHOR — the guest's faithful ask ALWAYS searches.
- *
- * The query is the ROUTING signal, not just a content search: app rows are indexed
- * on utterance-shaped `whenToUse` text written to meet real asks in embedding space.
- * A compressed ("career goals") or memory-stuffed paraphrase misses that handshake
- * and the wrong app (or none) unlocks — observed live, both directions. Prose asked
- * the model to preserve the ask; this makes it structural: for discovery-tool calls,
- * the turn's raw ask is prepended as the first query and the model's own queries
- * ride alongside as additional angles. The model still decides WHEN to search, which
- * MODE, and what facets to add — only preservation is enforced.
- *
- * Skipped for trivial asks (< 15 chars — "yes", "thanks" would anchor junk).
- */
-export function anchorSearchArgs(
-  toolName: string,
-  args: Record<string, unknown>,
-  ask: string | undefined,
-  log?: (msg: string) => void,
-): Record<string, unknown> {
-  if (!DISCOVERY_TOOL_NAMES.includes(toolName)) return args;
-  const anchor = typeof ask === "string" ? ask.trim() : "";
-  if (anchor.length < 15) return args;
-  const modelQueries = [
-    ...(typeof args?.query === "string" && (args.query as string).trim() ? [(args.query as string).trim()] : []),
-    ...(Array.isArray(args?.queries) ? (args.queries as unknown[]).map((q) => String(q ?? "").trim()).filter(Boolean) : []),
-  ];
-  const lower = anchor.toLowerCase();
-  const rest = modelQueries.filter((q) => q.toLowerCase() !== lower);
-  if (rest.length === modelQueries.length && modelQueries.some((q) => q.toLowerCase().includes(lower))) {
-    return args; // a model query already carries the full ask — nothing to enforce
-  }
-  const queries = [anchor, ...rest].slice(0, 8);
-  if (queries.length !== modelQueries.length || queries[0] !== modelQueries[0]) {
-    log?.(`⚓ Ask anchored into ${toolName}: "${anchor.slice(0, 60)}${anchor.length > 60 ? "…" : ""}" + ${rest.length} model angle(s)`);
-  }
-  const { query: _dropped, ...restArgs } = args;
-  return { ...restArgs, queries };
 }
 
 /** A neutral function-tool definition; each family maps this to its wire format. */

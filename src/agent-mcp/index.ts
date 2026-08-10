@@ -34,7 +34,7 @@ export type {
   AppInvocationContext,
 } from "./types.js";
 
-export { DISCOVERY_TOOL_NAMES, parseDiscoveredMCPs, handleDiscoveryResult, anchorSearchArgs } from "./discovery.js";
+export { DISCOVERY_TOOL_NAMES, parseDiscoveredMCPs, handleDiscoveryResult } from "./discovery.js";
 export { searchOncePerConversation } from "./memo.js";
 export { parseToolResult, hasDynamicHandoff, isTurnEndingHandoff } from "./handoff.js";
 export { rowComponentsFromResults, renderRowComponents } from "./rowComponents.js";
