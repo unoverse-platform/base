@@ -317,6 +317,19 @@ function remapStyleBindings(style: AnyNode, propMap: Record<string, string>): vo
 }
 
 function remapFields(node: AnyNode, propMap: Record<string, string>): void {
+  // A NESTED `Ref` IS REMAPPED THROUGH ITS OWN `props`. The values of an inner reference's
+  // `props` are field names in THIS tree's scope, so the host's rename has to reach them:
+  // an atom that composes another atom (toggle-row and form-toggle both draw toggle-switch)
+  // otherwise hands the inner one the OUTER atom's prop name, which the host has just
+  // renamed away. The switch then tests an absent key and never draws its ON state — the
+  // control looks right, moves nothing, and says nothing. Same silence as the visibleWhen
+  // object form below, one level deeper.
+  if (node.type === "Ref" && node.props && typeof node.props === "object") {
+    for (const k of Object.keys(node.props as AnyNode)) {
+      const v = (node.props as AnyNode)[k];
+      if (typeof v === "string" && propMap[v]) (node.props as AnyNode)[k] = propMap[v];
+    }
+  }
   if (node.bind) for (const k of Object.keys(node.bind)) if (propMap[node.bind[k]]) node.bind[k] = propMap[node.bind[k]];
   if (typeof node.visibleWhen === "string" && propMap[node.visibleWhen]) node.visibleWhen = propMap[node.visibleWhen];
   // THE OBJECT FORM REMAPS TOO. A guard is a guard whichever way it is written, and only

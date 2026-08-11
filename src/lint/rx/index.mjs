@@ -450,6 +450,44 @@ for (const [dir, isDir] of [[join(DS, "components"), true], [join(DS, "atoms"), 
 /** The exact-case key a Ref should use, or null when it resolves to nothing. */
 const canonicalRef = (ref) => canonicalKeys.get(ref.toLowerCase()) ?? null;
 
+/**
+ * THE PROPS AN ATOM ACTUALLY DECLARES.
+ *
+ * A `Ref` parameterises an atom two ways, and BOTH are looked up by name: `props` remaps
+ * the atom's own field names onto the host's, `with` supplies literals for them. A key
+ * the atom does not declare matches nothing, and the expander ignores it in silence.
+ *
+ * That silence has cost real screens. `form-toggle` declares `on` and `description`; a
+ * form wrote `props: { value: … }` and `with: { help: … }`, so the switch bound to nothing
+ * and the sub-line simply never appeared. Everything rendered, nothing was wrong to look
+ * at, and the control did not move. Nothing in rx/ could catch it because every node was
+ * structurally valid.
+ *
+ * So the keys are checked against the atom's own `props` block. Read lazily and cached:
+ * most definitions reference a handful of atoms, and a lint run should not parse the
+ * whole design system to check one file.
+ */
+const atomPropsCache = new Map(); // canonical ref -> Set of declared prop names, or null
+function declaredProps(ref) {
+  const key = canonicalRef(ref);
+  if (!key) return null;
+  if (atomPropsCache.has(key)) return atomPropsCache.get(key);
+  let props = null;
+  // Atoms are a file; a shared DS component is a folder holding its own definition. Only
+  // the atom form declares a prop contract this rule can check.
+  const file = defPath(join(DS, "atoms"), key);
+  if (file) {
+    try {
+      const def = readDef(file);
+      if (def && def.props && typeof def.props === "object") props = new Set(Object.keys(def.props));
+    } catch {
+      props = null; // unreadable: never invent a contract the author would have to satisfy
+    }
+  }
+  atomPropsCache.set(key, props);
+  return props;
+}
+
 // The filename is the key. A `name:` that disagrees with it is the drift above, waiting.
 //
 // EVERY HOME, not just the design system. This checked `marketplace/atoms` and
@@ -737,7 +775,7 @@ function componentNamesForFile(file) {
   // cannot outlive the run, and passed once rather than threaded as ten parameters.
   const ctx = {
     RX, DS, orgDirs, report, spaceSteps, stepList, checkDimension, checkToken, checkCondition,
-    appSizesForFile, componentNamesForFile, refResolves, canonicalRef, atomsDirExists,
+    appSizesForFile, componentNamesForFile, refResolves, canonicalRef, declaredProps, atomsDirExists,
     isFixture, isHook, isManifest, isTemplatePath, defRoot, readText,
   };
   const walkNode = makeWalkNode(ctx);

@@ -18,7 +18,7 @@ import { PRIMITIVES, CONDITION_KEYS, STYLE_KEYS, RAW_VALUE, CHILD_NODE_KEYS, PAR
 import { isDefFile, defName, defPath, readDef } from "./defs.mjs";
 
 export function makeWalkNode(ctx) {
-  const { report, checkCondition, checkDimension, checkToken, appSizesForFile, componentNamesForFile, refResolves, canonicalRef, atomsDirExists, stepList, spaceSteps, isTemplatePath, defRoot } = ctx;
+  const { report, checkCondition, checkDimension, checkToken, appSizesForFile, componentNamesForFile, refResolves, canonicalRef, declaredProps, atomsDirExists, stepList, spaceSteps, isTemplatePath, defRoot } = ctx;
 
 function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
   if (Array.isArray(node)) return node.forEach((n) => walkNode(n, file, root, widthCap));
@@ -69,6 +69,38 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
       const exact = canonicalRef(node.ref);
       if (exact && exact !== node.ref)
         report("warn", file, `Ref "${node.ref}" should be "${exact}". It resolves here because lookup ignores case, and fails on install because the marketplace does not`);
+    }
+    // A KEY THE ATOM DOES NOT DECLARE MATCHES NOTHING, IN SILENCE.
+    //
+    // `props` remaps the atom's own field names onto the host's and `with` supplies
+    // literals for them: both are looked up BY NAME against the atom's `props` block, and
+    // the expander ignores anything it cannot find. So a wrong name is not a broken tree,
+    // it is a perfect-looking element wired to nothing.
+    //
+    // It has cost real screens. `form-toggle` declares `on` and `description`; a form wrote
+    // `props: { value: … }` with `with: { help: … }` and got a switch bound to no field and
+    // a sub-line that never appeared. Every node was structurally valid, every other rule
+    // passed, and the control simply did not move when clicked.
+    if (typeof node.ref === "string" && declaredProps) {
+      const declared = declaredProps(node.ref);
+      // null = not an atom (a shared component declares no prop contract) or unreadable.
+      // Never invent a contract the author would then have to satisfy.
+      if (declared) {
+        for (const [key, source] of [["props", node.props], ["with", node.with]]) {
+          if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+          for (const name of Object.keys(source)) {
+            if (declared.has(name)) continue;
+            const known = [...declared].sort().join(", ");
+            report(
+              "error",
+              file,
+              `Ref "${node.ref}" ${key === "props" ? "remaps" : "passes"} "${name}", which the atom does not declare. ` +
+                `Both \`props\` and \`with\` are matched BY NAME against the atom's own props, and an unknown key is ` +
+                `silently ignored: the element renders and does nothing. ${node.ref} declares: ${known} (docs/design/03)`,
+            );
+          }
+        }
+      }
     }
   }
   // Icon glyphs are SERVED (theme.icons ← styles/semantic/icons), and the SDK draws
