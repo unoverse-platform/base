@@ -1,6 +1,6 @@
 {
   "name": "@unoverse-platform/base",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "description": "The Unoverse YAML runtime: node manifests, rx definitions, and the platform surface a node sees",
   "license": "MIT",
   "repository": {

@@ -598,6 +598,7 @@ for (const orgDir of orgDirs) {
 const KNOWN_LIFECYCLES = new Set(["onStart", "onEnterView"]);
 const PHASES_WITH_LAYOUTS = new Set(["onEnterView"]); // phases that fire per VIEW
 const PLATFORM_HANDLERS = new Set(["getDetail"]); // named handlers needing no file
+const LATCH_KEYS = new Set(["title", "background", "color"]);
 
 // Every credential DEFINITION this universe can offer a form for. They ship with node
 // packages (nodes/<pkg>/credentials/<name>.yaml); a component NAMES one, it never defines
@@ -684,6 +685,63 @@ for (const orgDir of [DS, ...orgDirs]) {
     for (const f of readdirSync(folder))
       if (f.endsWith(".js") && !declared.has(f.slice(0, -3)))
         report("error", join(folder, f), `${f} is a lifecycle handler no manifest opted into. Add "${f.slice(0, -3)}" to the manifest's lifecycle array, or delete the file — un-opted code never runs`);
+
+    /**
+     * LATCH (docs/MCP_COMPLETE_GUIDE.md §The Component Latch). Declaring it makes the
+     * component addressable: the pill goes up and the guest's next sentences travel to THIS
+     * instance. Every finding here is something that produces a pill which looks fine and
+     * behaves wrongly, which is why they are errors rather than warnings.
+     */
+    let latch;
+    try {
+      latch = readDef(mf).latch;
+    } catch {
+      latch = undefined; // malformed manifest is reported elsewhere
+    }
+    if (latch !== undefined) {
+      if (typeof latch !== "object" || latch === null || Array.isArray(latch)) {
+        report("error", mf, `"latch" must be a block ({ title, icon, background, color }), not ${Array.isArray(latch) ? "a list" : typeof latch}. Presence is what makes a component latchable, so a malformed one is an intent nothing can honour (docs/MCP_COMPLETE_GUIDE.md §The Component Latch)`);
+      } else {
+        // The pill is the ONLY sign the guest has that their words are landing on this
+        // component rather than the conversation. Unlabelled, it says nothing.
+        if (typeof latch.title !== "string" || !latch.title.trim())
+          report("error", mf, `"latch" needs a "title" — it is what the pill reads, and the pill is the only thing telling the guest what they are addressing. Name the thing, not the verb ("Booking", not "Edit booking")`);
+
+        const extra = Object.keys(latch).filter((k) => !LATCH_KEYS.has(k));
+        if (extra.length)
+          report("error", mf, `"latch" has no key(s) ${extra.join(", ")}. The block is exactly ${[...LATCH_KEYS].join(", ")} — an invented key is silently ignored, so whatever it was meant to do never happens`);
+
+        // Same law as every other surface: tokens, never hex. ABSTAINS where the token set
+        // cannot be read, exactly as checkToken does — judging against half a set rejects
+        // correct work.
+        const T = tokensForFile(mf);
+        if (T) {
+          for (const k of ["background", "color"])
+            if (typeof latch[k] === "string" && latch[k].trim() && !T.color.has(latch[k]))
+              report("error", mf, `latch.${k}: "${latch[k]}" is not a colour token. Unknown names reach CSS verbatim and are dropped, so the pill renders unstyled with no error anywhere. Known: ${[...T.color].sort().join(", ") || "none"} (docs/design/06)`);
+        }
+
+        /**
+         * TWO CONTRADICTORY DECLARATIONS. A latch says "the conversation is now ABOUT this
+         * instance", which is a conversation-scoped relationship; `lifetime: turn` (the
+         * default) says the instance is done being the subject at the end of this turn.
+         * One manifest cannot mean both.
+         *
+         * NOT because typing wipes it — it does not. The new-turn reset (`beginExchange`)
+         * is GONE (store.ts, the seven rules, rule 7: "typing changes NOTHING by itself"),
+         * so a turn-lifetime page survives the guest's next message and a latch on it
+         * appears to work. It comes apart LATER and conditionally: `supersede` retracts a
+         * non-durable slice when another component arrives into the SAME state, and
+         * `cancelBelow` / `closeSurfaces` release it on a higher arrival or a guest close.
+         * Each skips `lifetime: "conversation"` and nothing else. The pill is derived from
+         * the slice, which survives the retract, so it stays up pointing at a page that has
+         * left the surface. Intermittent, silent, and indistinguishable from the latch
+         * "just not working" — which is why it is caught here rather than lived with.
+         */
+        if (readDef(mf).lifetime !== "conversation")
+          report("error", mf, `"latch" needs "lifetime: conversation". A latch makes the conversation ABOUT this instance, which outlives a turn; the default turn lifetime says the opposite. Concretely: another component arriving into this component's state retracts it to inline (store.ts supersede) while the pill — derived from the surviving slice — stays up, so the guest goes on addressing a page that has left the surface (docs/MCP_COMPLETE_GUIDE.md §The Component Latch)`);
+      }
+    }
   }
 }
 

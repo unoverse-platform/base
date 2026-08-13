@@ -70,8 +70,11 @@ export function parseMaybeJson(result: unknown): unknown {
  * SKIPPED without an executionId, which is the node-test and headless case: there is no
  * execution to attach a bar to, and posting a trace with no parent would create an orphan
  * row nothing renders.
+ *
+ * EXPORTED so the duplex session draws the same bar. Shared, not copied: two implementations
+ * of "what a tool call looks like on a timeline" drift the first time either is touched.
  */
-function recordToolTrace(
+export function recordToolTrace(
   node: ComposedNode,
   ctx: RunContext,
   toolName: string,

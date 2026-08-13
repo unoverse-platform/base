@@ -108,6 +108,10 @@ export async function runFinal(
     const conversationId = String(
       (ctx as any).scope?.conversationId ?? (ctx as any).config?.conversationId ?? (ctx as any).scope?.executionId ?? node.type,
     );
+    // Every other transport builds one of these; the socket built none, so voice calls reported
+    // no tokens at all. `usage.save()` sits BEFORE the throw: a call that ended badly still
+    // burned what it spoke.
+    const usage = makeUsageCollector(node, ctx);
     const result = await runDuplexSession({
       node,
       call,
@@ -118,12 +122,14 @@ export async function runFinal(
       lane: lane ?? null,
       conversationId,
       tools,
+      usage,
       onError: (message) => {
         // Surfaced rather than thrown: one bad frame mid-call must not end a conversation the
         // person is still having.
         void emitter.narrator(message);
       },
     });
+    usage.save();
     if (result.reason === "error") throw new Error(`${node.type}: duplex session failed: ${result.error}`);
     return 200;
   }

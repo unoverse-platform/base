@@ -36,6 +36,24 @@ export interface UsageCollector {
   save(): void;
 }
 
+/**
+ * Add one usage block into the running totals, field by field, AT ANY DEPTH.
+ *
+ * Summing one level down dropped `input_token_details.cached_tokens_details.*` — the split that
+ * says how cached tokens divide across text and audio. Without it a cached token cannot be
+ * priced, and Canvas billed them all at the full fresh rate (found 2026-08-12). Depth limits
+ * here are bugs waiting for the next vendor to nest a field.
+ */
+function addInto(totals: Record<string, any>, block: Record<string, unknown>): void {
+  for (const [k, v] of Object.entries(block)) {
+    if (typeof v === "number") totals[k] = ((totals[k] as number) ?? 0) + v;
+    // Arrays excluded deliberately: a list in a usage block is not a quantity to add up.
+    else if (v && typeof v === "object" && !Array.isArray(v)) {
+      addInto((totals[k] = (totals[k] as Record<string, any>) ?? {}), v as Record<string, unknown>);
+    }
+  }
+}
+
 export function makeUsageCollector(node: ComposedNode, ctx: RunContext): UsageCollector {
   const totals: Record<string, number | Record<string, number>> = {};
   let seen = false;
@@ -46,17 +64,8 @@ export function makeUsageCollector(node: ComposedNode, ctx: RunContext): UsageCo
       const u = sniffUsage(payload);
       if (!u) return;
       seen = true;
-      // Numeric fields sum across calls. Detail objects (`output_tokens_details.
-      // reasoning_tokens`, `input_tokens_details.cached_tokens`) sum ONE level deep —
-      // the Token Usage view reads the reasoning burn and the cache hits from exactly
-      // those nested fields, so dropping them showed thinking as zero.
-      for (const [k, v] of Object.entries(u)) {
-        if (typeof v === "number") totals[k] = ((totals[k] as number) ?? 0) + v;
-        else if (v && typeof v === "object" && !Array.isArray(v)) {
-          const nest = (totals[k] = (totals[k] as Record<string, number>) ?? {});
-          for (const [nk, nv] of Object.entries(v)) if (typeof nv === "number") nest[nk] = (nest[nk] ?? 0) + nv;
-        }
-      }
+      // Numeric fields sum across calls; detail objects sum field by field, at ANY depth.
+      addInto(totals, u);
       model ??= payload?.response?.model ?? payload?.model ?? undefined;
     },
     save() {

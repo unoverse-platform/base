@@ -939,17 +939,36 @@ export interface AppManifest {
   /** Load mode. true = on load, read the template AND fire the workflow (read resource +
    *  call tool). false/absent = just load the template (read resource), wait for the user. */
   autoTrigger?: boolean;
-  /** The org's DEFAULT app — the front door of its `/mcp/{org}` endpoint. Exactly one app per
-   *  org sets this; the endpoint marks its tool as the entry point (`_meta["unoverse/default"]`)
-   *  so a host opens it first as the conversation's home. Absent/false = an ordinary app in the
-   *  org, reached by name or discovery. Replaces the legacy per-app `expose` flag. */
-  default?: boolean;
+  /** Publish this app on the EXTERNAL MCP endpoint. OPT-IN: absent/false keeps the app off
+   *  `/mcp` and `/mcp/{org}` entirely (no tool, no template listing) — only `makeMCP: true`
+   *  reaches an outside client. Default-deny, so a new app is never externally callable by
+   *  accident; publishing is always a deliberate line in the manifest.
+   *  Visibility ONLY: orthogonal to auth, which is decided by the workflow's trigger toggle
+   *  (`isPublicEntry`). The org URL picks WHICH SET a connector sees; this picks what is in
+   *  that set at all. */
+  makeMCP?: boolean;
+  /** Asset origins this app's content loads (images, media) — e.g. the org's image CDN.
+   *  Authored per app in manifest.yaml; the server UNIONS them across the connector's
+   *  published apps into the MCP-app shell's CSP (`ui.csp.resourceDomains`). A sandboxed
+   *  host builds its img-src from that list and blocks everything else, so an origin
+   *  missing here renders as broken images in ChatGPT/Claude while working in our own
+   *  hosts. Full origins with scheme, wildcards allowed: "https://*.datocms-assets.com". */
+  assetDomains?: string[];
   /** Render lifetime (docs/design/04 §Two lifetimes). Default "turn": the instance returns
    *  to inline/retires on the next user turn (the universal reset). "conversation" = a
    *  DURABLE conversation-scoped surface (a cart, an itinerary, a composed page): keyed by
    *  the CONVERSATION (not the turn) so every re-call hydrates the same slice, and the
    *  client's new-turn reset skips it — it stays on screen until replaced or closed. */
   lifetime?: "turn" | "conversation";
+  /** LATCHABLE (docs/MCP_COMPLETE_GUIDE.md §The Component Latch). Present = the conversation
+   *  can be ADDRESSED AT this instance: while its pill is up, what the guest says next travels
+   *  with the instance's key and its current state, and the answer merges back into it instead
+   *  of placing a new component. Absent = never latchable.
+   *  Travels to the client the same way `lifetime` does — as a field on the slice, seeded with
+   *  the render — because the holder is DERIVED from the live slices and never stored. At most
+   *  one latch exists: the highest-ranked latchable instance by the template's declared state
+   *  order. Colours are semantic tokens, never hex. */
+  latch?: { title: string; background?: string; color?: string };
   /** Workbench MOCK: what each STATE's preview seeds — `{ "<state>": ["course-card",
    *  "course-card"] }` (a repeated name = several instances, e.g. a card rail). The
    *  author decides per state; the seeded instances are written INTO that state's view

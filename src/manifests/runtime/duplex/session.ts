@@ -58,7 +58,7 @@ import { makeAudioBuffer, resamplePcm16, CLIENT_RATE, type AudioLane } from "./a
 const IDLE_TIMEOUT_MS = 30_000;
 const MAX_SESSION_MS = 30 * 60_000;
 
-import { offerDiscovered, parseMaybeJson, type ToolBridge } from "../tools/toolloop.js";
+import { offerDiscovered, parseMaybeJson, recordToolTrace, type ToolBridge } from "../tools/toolloop.js";
 
 
 /** Resolve one manifest message against the run scope, with `extra` layered on top. */
@@ -89,9 +89,16 @@ export async function runDuplexSession(opts: {
   conversationId: string;
   /** MCP tools, when an `mcp` provider is wired to this node's consumer handle. */
   tools?: ToolBridge;
+  /**
+   * THE TOKEN BILL, collected exactly as every HTTP transport collects it.
+   *
+   * Owned by the CALLER, like the collector on the json and sse paths, because the caller is
+   * what knows the run is over and must `save()` once. This only feeds it.
+   */
+  usage?: { see(payload: any): void };
   onError?: (message: string, detail?: unknown) => void;
 }): Promise<DuplexResult> {
-  const { node, call, ctx, emitter, url, headers, lane, conversationId, tools, onError } = opts;
+  const { node, call, ctx, emitter, url, headers, lane, conversationId, tools, usage, onError } = opts;
   const exchange = node.api?.toolExchange;
   const audio = node.api?.audio ?? {};
   const outSpec = audio.out;
@@ -113,6 +120,9 @@ export async function runDuplexSession(opts: {
    * the retired node's `audioStarted` flag, which existed for exactly this.
    */
   let speaking = false;
+
+  /** The tool list, which GROWS: a search mid-call can add to it and the socket re-offers it. */
+  let live: any[] = [];
 
   const send = (payload: unknown) => {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -166,17 +176,17 @@ export async function runDuplexSession(opts: {
       touch();
       try {
         /**
-         * TOOLS ARE OFFERED IN THE HANDSHAKE, so they have to be discovered before it is sent.
+         * THE TOOLS THE CALL OPENS WITH, discovered before the handshake goes out because the
+         * handshake is where they are first offered. Exposed to the `open` messages as `tools`,
+         * which is why the manifest writes the vendor's envelope itself instead of the executor
+         * guessing at it.
          *
-         * A realtime session declares its tools ONCE, in session.update, rather than per request
-         * the way an HTTP turn does — so there is no later opportunity. Exposed to the `open`
-         * messages as `tools`, which is why the manifest can write the vendor's envelope itself
-         * instead of the executor guessing at it.
+         * These are the SEED, not the whole set — `offer` below carries what discovery adds
+         * later.
          *
          * Empty when nothing is wired, and that is the normal case: the node degrades to a plain
          * voice call rather than failing, exactly as an agent with no MCP provider does.
          */
-        let live: any[] = [];
         if (tools && exchange) {
           try {
             live = await offerDiscovered(exchange, tools);
@@ -244,6 +254,11 @@ export async function runDuplexSession(opts: {
         return; // a frame that is not JSON is not something a manifest can describe
       }
       const type = String(event?.type ?? "");
+
+      // Billed per RESPONSE, so a ten-turn call carries ten usage blocks and the collector sums
+      // them. Above the dispatch, because the frame carrying usage must not depend on which
+      // branch claims it. `sniffUsage` already reads `payload.response.usage` — no manifest change.
+      usage?.see(event);
 
       try {
         // AUDIO, the one thing that bypasses an output connector, and only because MCP cannot
@@ -341,6 +356,17 @@ export async function runDuplexSession(opts: {
             const rawArgs = String((await evaluate(exchange.call.arguments, scope)) ?? "{}");
             if (name) {
               let output: string;
+              // A lookup takes 8-9s, and silence on a call reads as a dropped line. The client,
+              // the lookup-indicator and the docs all had this wired already; nothing ever sent it.
+              lane?.sendControl(conversationId, {
+                type: "AUDIO_STATE",
+                state: "TOOL_USE",
+                metadata: { toolName: name },
+              });
+              // Started BEFORE the call, so the timeline bar measures the wait the caller
+              // actually sat through, not the bookkeeping after it.
+              const toolStart = Date.now();
+              let toolOk = true;
               try {
                 const args = JSON.parse(rawArgs || "{}");
                 /**
@@ -348,24 +374,45 @@ export async function runDuplexSession(opts: {
                  * function: a voice call that discovers an app must open its page exactly as a
                  * typed one does, and the result must be leaned before it goes back — on a
                  * voice call every extra token is latency the person hears.
-                 *
-                 * `minted` is DROPPED here, loudly. A live vendor session fixes its tool list
-                 * when the socket opens, so there is nowhere to put a tool discovered
-                 * mid-call. Saying so beats an empty array nobody reads: the page still opens
-                 * and the model still sees the row, it just cannot invoke the app until the
-                 * next turn re-establishes the session.
                  */
                 const absorbed = await tools.absorb(name, await tools.call(name, args));
-                if (absorbed.minted.length)
-                  console.log(
-                    `[manifests] ${node.type}: ${absorbed.minted.length} app tool(s) discovered mid-call and not registered — a duplex session's tool list is fixed at open`,
-                  );
+                /**
+                 * THE TOOL LIST IS DISCOVERED, NOT DECLARED: a search returns rows pointing at apps,
+                 * each of which becomes a tool. The handshake's tools are only the seed.
+                 *
+                 * These used to be dropped on the claim that a session's tool list is fixed at open.
+                 * That was true of this code, never of the vendor: verified live 2026-08-12, a
+                 * mid-call `session.update` is accepted, MERGES, and the tool is callable next turn.
+                 * Sent immediately — `session.update` is not gated on an idle conversation, only
+                 * `response.create` is.
+                 */
+                if (absorbed.minted.length) {
+                  for (const tool of absorbed.minted) live.push(await evaluate(exchange.tool, { tool } as any));
+                  if (exchange.offer) {
+                    const grown = await message(exchange.offer, ctx, { tools: live });
+                    for (const m of ([] as any[]).concat(grown ?? [])) if (m) send(m);
+                    console.log(
+                      `[manifests] ${node.type}: re-offered ${live.length} tool(s) after ${absorbed.minted.length} discovered by ${name}`,
+                    );
+                  } else {
+                    console.log(
+                      `[manifests] ${node.type}: ${absorbed.minted.length} tool(s) discovered mid-call and not registered — this package's toolExchange declares no 'offer'`,
+                    );
+                  }
+                }
                 output = absorbed.content;
               } catch (err: any) {
                 // Reported TO THE MODEL rather than thrown. A failed tool on a live call should let
                 // the assistant say it could not do the thing, not drop the conversation.
+                toolOk = false;
                 output = `Tool "${name}" failed: ${err?.message ?? err}`;
               }
+              // The same timeline row an HTTP agent's tool call draws. `runToolLoop` has recorded
+              // these since the migration; the socket never called it, so voice tools were invisible.
+              recordToolTrace(node, ctx, name, parseMaybeJson(rawArgs), output, toolStart, toolOk);
+              // After the catch, so a tool that THREW still stops the dots. Spinning forever is
+              // worse than no indicator: it promises something still coming.
+              lane?.sendControl(conversationId, { type: "AUDIO_STATE", state: "TOOL_USE_COMPLETED" });
               // PARSED for the connector lane only (readable mcpResult, same as the HTTP
               // loop); the model message two lines down keeps the raw `output` string —
               // the vendor wire requires text.

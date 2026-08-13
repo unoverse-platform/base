@@ -93,6 +93,34 @@ export function makeEmitter(node: ComposedNode, onEmit: (e: Emission) => void, b
     onEmit(emission);
   };
 
+  /**
+   * END OF A TURN: flush what the throttle holds, then start the accumulator over.
+   *
+   * `accumulate` runs for the length of a RUN, which is one answer over HTTP and a whole
+   * CONVERSATION over a socket — so without this every turn carries every turn before it.
+   * Flush BEFORE clearing, or the turn's closing words go with it.
+   */
+  const resetTurn = (match?: string) => {
+    if (match === undefined) return;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row.resetOn) continue;
+      const hit = Array.isArray(row.resetOn) ? row.resetOn.includes(match) : row.resetOn === match;
+      if (!hit) continue;
+      const s = state.get(i);
+      if (!s) continue;
+      if (s.pending !== undefined) {
+        const emission = { emit: row.emit, value: s.pending };
+        s.pending = undefined;
+        emissions.push(emission);
+        onEmit(emission);
+      }
+      s.acc = "";
+      s.chars = 0;
+      s.lastAt = 0;
+    }
+  };
+
   // `base` is what every row sees regardless of where it fired: config, the signed-in
   // user, and (for a chained call) each step's reply. A row's own source keys are layered
   // on top, so `response` still means the thing that just arrived.
@@ -126,8 +154,12 @@ export function makeEmitter(node: ComposedNode, onEmit: (e: Emission) => void, b
      * `extra` carries the replies of earlier calls, which only the caller that ran them
      * knows about.
      */
-    response: (payload: any, match?: string, extra: Record<string, unknown> = {}) =>
-      fire("response", { ...extra, response: payload }, match),
+    response: async (payload: any, match?: string, extra: Record<string, unknown> = {}) => {
+      await fire("response", { ...extra, response: payload }, match);
+      // AFTER the rows have seen it. A turn-ending event may itself be something a row emits
+      // on, and resetting first would clear the accumulator the row is about to read.
+      resetTurn(match);
+    },
     narrator: (line: string) => fire("narrator", { narrator: { line } }),
     tool: (call: { name: string; args: unknown; output: unknown }) => fire("tool", { call }),
 

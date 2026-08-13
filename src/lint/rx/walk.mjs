@@ -198,13 +198,30 @@ function walkNode(node, file, root, widthCap = null, isLayoutRoot = false) {
   // deprecated FOCUS BRIDGE (STATE_MODEL §5b): nothing writes a template `defaultState`
   // key anymore — a component writes only its own slice; templates react via select.where.
   // (Legit panel/draft setTemplateValue writes a DIFFERENT key and is untouched.)
+  //
+  // The PLATFORM-DEFINED chrome keys a shared partial may write (see the exception below).
+  // Add to this only for state the SDK itself publishes and the design system must be able
+  // to answer — never for an app's own vocabulary, which is what template-local partials
+  // are for.
+  const SHARED_CHROME_KEYS = new Set(["latchDismissed"]);
   const scanAction = (a) => {
     if (!a || typeof a !== "object") return;
     if (a.type === "setTemplateValue") {
       // A COMPONENT writes only its own slice — ANY template-state write from the
       // shared component home is the deprecated bridge (STATE_MODEL §5b). Template-
       // local partials (composer, suggestions) legitimately write template chrome.
-      if (!isTemplatePath(file))
+      //
+      // NARROW EXCEPTION (2026-08-13): a SHARED chrome partial may write the chrome keys
+      // named below, and nothing else. The rule's target is the deprecated FOCUS bridge —
+      // a component reaching up to move the template's state — which is why its own note
+      // above says a write to a DIFFERENT key is untouched. Some chrome is genuinely
+      // universal and belongs in the design system rather than copied into every app's
+      // folder: the composer's latch pill is one bar, shared, and its ✕ is the guest's only
+      // exit from the latch (docs/MCP_COMPLETE_GUIDE.md §The Component Latch). The list is
+      // an ALLOWLIST on purpose — it grants exactly the keys the platform defines and stays
+      // an error for everything else, so this cannot widen into "shared components may
+      // write template state".
+      if (!isTemplatePath(file) && !(Array.isArray(a.values) && a.values.length && a.values.every((v) => v && SHARED_CHROME_KEYS.has(v.key))))
         report("error", file, `a component never writes template state: setTemplateValue is the deprecated bridge; change the view with setValue and let the template react via select.where (STATE_MODEL §5b)`);
       else if (Array.isArray(a.values) && a.values.some((v) => v && v.key === "defaultState"))
         report("warn", file, `setTemplateValue writing "defaultState" is the deprecated focus bridge. A component writes only its own slice; templates react via ComponentSlot.select.where (STATE_MODEL §5b)`);
