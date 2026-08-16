@@ -1,5 +1,6 @@
 /** Settle-once. One request, one result. */
 import { performApi, performService } from "../runtime/index.js";
+import { deliverSends } from "./send.js";
 import { assertAuthorized } from "../runtime/authorize.js";
 import { manifestFor } from "./lookup.js";
 import { contextFor } from "./context.js";
@@ -47,7 +48,7 @@ export class ManifestPromiseExecutor {
     // and no side effect. Authorization that runs after the call has gone out is an audit
     // log, not a gate.
     assertAuthorized(node, executionContext, config);
-    const { outputs } = await performApi(
+    const { outputs, emissions } = await performApi(
       node,
       contextFor(node, inputs, config, executionContext),
       () => {},
@@ -60,6 +61,9 @@ export class ManifestPromiseExecutor {
       // hands it to platform code, never to the manifest.
       sessionFor(executionContext),
     );
+    // Any `send` row addressed a NODE rather than a connector: deliver those before settling,
+    // so a loop's next pass is already queued when this node reports done.
+    await deliverSends(node, emissions, executionContext);
     // Outputs go back TOP-LEVEL under __outputs; anything else never reaches a
     // downstream node.
     return { __outputs: outputs };

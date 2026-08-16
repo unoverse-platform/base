@@ -794,7 +794,10 @@ export function loadDefinition(
           //   - a nested `on` + `initial` pair → its scalar initial (the substep key)
           if (k === "component") {
             const tree = (def.state as Record<string, unknown> | undefined)?.view as
-              | { initial?: unknown; states?: Record<string, { on?: unknown; initial?: unknown } | null> }
+              | {
+                  initial?: unknown;
+                  states?: Record<string, { on?: unknown; initial?: unknown; states?: Record<string, unknown> } | null>;
+                }
               | undefined;
             if (tree && typeof tree === "object" && tree.states && typeof tree.states === "object") {
               const names = Object.keys(tree.states);
@@ -825,10 +828,19 @@ export function loadDefinition(
               // component moved. (The manifest keeps the key: at app level it is the load
               // mode the router branches on, a different axis with the same name.)
               const { defaultState: _legacyAlias, ...authored } = (def.state ?? {}) as Record<string, unknown>;
+              // ORDER IS THE PRIORITY, at BOTH levels (2026-08-15). The first state
+              // declared is the one the component arrives in, and the first substate
+              // declared is the step its `on` axis starts on. An `initial` key said the
+              // same thing a second time and was free to contradict the list, which is
+              // how a component could declare one arrival and ship another. It is still
+              // READ where a def has not been swept, and lint-forbidden in rx.
               const flat: Record<string, unknown> = { ...authored, view: initial };
               for (const s of Object.values(tree.states))
-                if (s && typeof s === "object" && typeof s.on === "string" && typeof s.initial === "string")
-                  flat[s.on] = s.initial;
+                if (s && typeof s === "object" && typeof s.on === "string") {
+                  const subs = s.states && typeof s.states === "object" ? Object.keys(s.states) : [];
+                  const step = typeof s.initial === "string" ? s.initial : subs[0];
+                  if (step) flat[s.on] = step;
+                }
               def.state = flat;
             }
           }

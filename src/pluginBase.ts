@@ -40,6 +40,13 @@ export interface PlatformDependencies {
     config: any,
     context: any
   ) => Promise<any>;
+  deliverToNode?: (
+    executionId: string,
+    nodeId: string,
+    handle: string,
+    value: unknown,
+    signal?: string,
+  ) => Promise<void>;
   getAudioWebSocketManager?: () => any;
   [key: string]: any;
 }
@@ -154,6 +161,13 @@ export interface GravityPluginAPI {
     config: any,
     context: any,
   ) => Promise<any>;
+  deliverToNode?: (
+    executionId: string,
+    nodeId: string,
+    handle: string,
+    value: unknown,
+    signal?: string,
+  ) => Promise<void>;
   classes: { PromiseNode: any; CallbackNode: any };
   types: { NodeInputType: any; NodeConcurrency: any };
 }
@@ -193,6 +207,7 @@ export function initializePlatformFromAPI(api: GravityPluginAPI) {
     getRedisClient: api.getRedisClient,
     gravityPublish: api.gravityPublish,
     executeNodeWithRouting: api.executeNodeWithRouting,
+    deliverToNode: api.deliverToNode,
     getAudioWebSocketManager: api.getAudioWebSocketManager,
   } as PlatformDependencies);
 }

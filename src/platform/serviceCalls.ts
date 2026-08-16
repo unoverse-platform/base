@@ -95,6 +95,43 @@ export async function emitNodeOutputToWorkflow(payload: {
 }
 
 /**
+ * Hand a value to a NAMED node in the caller's own run, with no edge between them.
+ *
+ * The out-of-process half of the manifest `send:` row: manifest nodes execute in this host, so a
+ * send has to cross to the workflow service the same way a node output does.
+ *
+ * THROWS, unlike `emitNodeOutputToWorkflow` above, and the difference is deliberate. A lost node
+ * output costs a render. A lost delivery costs a loop its next pass, and the loop then reports
+ * success having processed one item — the exact silent failure this mechanism replaced. Better a
+ * stopped run than a wrong answer.
+ */
+export async function deliverToNodeInWorkflow(payload: {
+  executionId: string;
+  nodeId: string;
+  handle: string;
+  value: any;
+  signal?: string;
+}): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${WORKFLOW_SERVICE_URL}/deliver-to-node`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error: any) {
+    throw new Error(
+      `deliverToNode: could not reach the workflow service to deliver "${payload.nodeId}.${payload.handle}" — ${error.message}`,
+    );
+  }
+  if (!response.ok) {
+    throw new Error(
+      `deliverToNode: the workflow service refused delivery of "${payload.nodeId}.${payload.handle}" (${response.status})`,
+    );
+  }
+}
+
+/**
  * Save MCP trace by calling workflow service
  */
 export async function saveMCPTraceToWorkflow(trace: any): Promise<string> {

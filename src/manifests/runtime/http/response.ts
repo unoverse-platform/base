@@ -9,7 +9,15 @@ import { decodeDynamoJson } from "../auth/aws.js";
  */
 
 export interface Emission {
-  emit: string;
+  /**
+   * The output connector this fired on. Absent on a `send` row, which addresses a NODE
+   * instead of a connector and therefore has no dot on the canvas and no edge to draw.
+   */
+  emit?: string;
+  /** Target NODE id, resolved from the row's `send` template. Present only on a send row. */
+  to?: string;
+  /** Input handle on the target node. Defaults to `input`. */
+  handle?: string;
   value: unknown;
 }
 

@@ -4,7 +4,12 @@
  */
 
 import { clientTransport } from "./clientTransport.js";
-import { callServiceViaWorkflow, saveTokenUsageToWorkflow, saveMCPTraceToWorkflow } from "./serviceCalls.js";
+import {
+  callServiceViaWorkflow,
+  saveTokenUsageToWorkflow,
+  saveMCPTraceToWorkflow,
+  deliverToNodeInWorkflow,
+} from "./serviceCalls.js";
 import { getRedisClient } from "./redis.js";
 import { getDistributedAudioManager } from "./audioManager.js";
 
@@ -63,6 +68,18 @@ export function buildExecutionContext(nodeType: string, inputs: any, config: any
     },
     saveTokenUsage: saveTokenUsageToWorkflow,
     saveMCPTrace: saveMCPTraceToWorkflow,
+    /**
+     * THE `send:` BRIDGE, and it belongs on THIS api for the reason the audio-lane note below
+     * spells out: a manifest node has only what is on `executionContext.api`. `pluginAPI.ts`
+     * exposing it is not enough — that is the api a PLUGIN receives at setup, and LoopEnd runs
+     * here, in the node host, reached remotely by the engine.
+     *
+     * Same crossing as `saveTokenUsage` above: the work happens in the workflow service, so the
+     * call goes over the same door. It THROWS on failure rather than logging, because a dropped
+     * delivery is a loop that stops after one pass and reports success.
+     */
+    deliverToNode: async (executionId: string, nodeId: string, handle: string, value: unknown, signal?: string) =>
+      deliverToNodeInWorkflow({ executionId, nodeId, handle, value, signal }),
     getRedisClient,
     /**
      * THE AUDIO LANE, and its absence here was a total, silent failure of every voice node.

@@ -254,7 +254,20 @@ export function lintNode(dir, pkg) {
     const from = r.from ?? "response";
     if (!SOURCES.includes(from))
       report("error", F.api, `events[${i}] has from: "${from}". Must be one of ${SOURCES.join(", ")} (DECLARATIVE_NODES.md §5)`);
-    if (!outputs.has(r.emit))
+    /**
+     * A `send` ROW ADDRESSES A NODE, NOT A CONNECTOR, so the coverage and order rules below do
+     * not apply to it: there is no dot for it to cover and none to be out of order with. What it
+     * must not do is claim both, which would leave the reader unable to say where the value went.
+     */
+    if (r.send && r.emit)
+      report("error", F.api, `events[${i}] sets both emit and send. A row either writes a connector or addresses a node, never both`);
+    if (r.send && typeof r.send === "string" && !r.send.includes("{{"))
+      report(
+        "warn",
+        F.api,
+        `events[${i}] sends to the literal id "${r.send}". A hardcoded target only works on a canvas where that id exists — read it from config instead, e.g. {{ config.loopStartNodeId }}`,
+      );
+    if (!r.send && !outputs.has(r.emit))
       report("error", F.api, `events[${i}] emits to "${r.emit}", which is not a declared output (interface.yaml)`);
     // `match` names a streamed event type, so it means nothing on the other sources.
     if (r.match && from !== "response")
@@ -282,7 +295,7 @@ export function lintNode(dir, pkg) {
 
   // Coverage: an output nothing emits to is dead, and downstream nodes can wire to it.
   if (api) {
-    const emitted = new Set(rows.map((r) => r.emit));
+    const emitted = new Set(rows.filter((r) => !r.send).map((r) => r.emit));
     for (const o of outputs)
       if (!emitted.has(o)) report("warn", F.iface ?? F.node, `output "${o}" is declared but no events row emits to it`);
   }
@@ -291,7 +304,7 @@ export function lintNode(dir, pkg) {
   // Compared over the outputs that ARE covered, so a missing row reports once (above)
   // rather than also reading as a reorder.
   if (rows.length) {
-    const rowOrder = [...new Set(rows.map((r) => r.emit))].filter((n) => outputs.has(n));
+    const rowOrder = [...new Set(rows.filter((r) => !r.send).map((r) => r.emit))].filter((n) => outputs.has(n));
     const want = outputOrder.filter((n) => rowOrder.includes(n));
     if (rowOrder.join(",") !== want.join(","))
       report(
@@ -540,6 +553,22 @@ export function lintNode(dir, pkg) {
       // A template field on an object/array takes a `return` expression, not handlebars.
       if (f["ui:field"] === "template" && (f.type === "object" || f.type === "array") && typeof f.default === "string" && f.default.trim() && !f.default.startsWith("return "))
         report("warn", F.config, `${n}: is an object template, so its value is a "return ..." expression, not handlebars (06-config-schema.md)`);
+      // A NUMBER OR A BOOLEAN IS NEVER A TEMPLATE FIELD, and this is an error rather than a
+      // warning because it takes the browser down. `ui:field: template` draws the CodeMirror
+      // editor, whose document is TEXT; handed the number 10 or the boolean true it builds a
+      // change set of length NaN, empties itself and freezes the tab the moment the config
+      // panel opens (SpatialSearch, 2026-08-13 to 2026-08-15).
+      //
+      // Nothing is lost by leaving it off. The marker is not what makes a field wirable: the
+      // engine resolves {{ }} in ANY string config value whatever the field is marked as
+      // (TemplateResolver.ts), so a route still decides a stepper's or a tick-box's value per
+      // run. The marker only chooses the control that is drawn, and the control follows type.
+      if (f["ui:field"] === "template" && (f.type === "number" || f.type === "integer" || f.type === "boolean"))
+        report(
+          "error",
+          F.config,
+          `${n}: is a ${f.type}, so it cannot carry "ui:field: template" — that draws a text editor, which a non-string value crashes. Drop the marker; a route can still wire the field, since the engine templates any string config value (06-config-schema.md)`,
+        );
     }
 
     // Every {{ config.x }} in the request must name a real config field.

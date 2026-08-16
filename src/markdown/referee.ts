@@ -14,12 +14,37 @@
  * one-shots the whole page (observed live: it always does): the caller accepts the
  * good parts and rejects only the broken ones by name.
  */
+// PLACEHOLDER VALUES ARE REJECTED, NOT MERGED. Both erasers above exist so the model
+// never needs a stand-in — omit the part (untouched) or send it empty (clear). Models
+// pad anyway when told to "send only some sections": observed live 2026-08-16, every
+// omitted part padded with a literal "x" per call, briefly rendering an "x"-covered
+// page. The stand-ins are a closed, well-observed set ("x", dashes, "N/A", "TBD",
+// "Not stated" — the 2026-08-15 incident); real one-character values are not part of
+// this vocabulary anywhere a brief applies.
+const PLACEHOLDER = /^(?:[xX*?]|[-–—.,;:_/\\]+|n\/?a|tbd|to be confirmed|not stated|none stated|placeholder|pending|unknown)$/i;
+const isPlaceholder = (v: string): boolean => PLACEHOLDER.test(v.trim());
+
 export function validateBriefPart(schema: Record<string, unknown>, name: string, value: unknown): string[] {
   const problems: string[] = [];
 
   const checkString = (path: string, v: unknown, spec: Record<string, unknown>): void => {
+    // A TOP-LEVEL scalar sent as an empty string is a deliberate CLEAR, and it must be
+    // accepted: a blank part is a valid final state (briefService's termination
+    // contract), and on a conversation-lifetime component the eraser is the only way to
+    // repair a polluted value — omitting the part keeps it, and rejecting the empty
+    // forces the model to invent a placeholder instead (observed live 2026-08-15: six
+    // "Not stated"s were the model's answer to this exact rejection). Item fields stay
+    // strict: an entry with an empty title is malformed — drop the entry, not the field.
+    const isTopLevelClear = path === name && typeof v === "string" && v.trim() === "";
+    if (isTopLevelClear) return;
     if (typeof v !== "string" || v.trim() === "") {
-      problems.push(`${path}: empty or missing — fill it with real content from your spatial search results`);
+      problems.push(`${path}: empty or missing — fill it with real content from your source material`);
+      return;
+    }
+    if (isPlaceholder(v)) {
+      problems.push(
+        `${path}: "${v.trim()}" is a placeholder — never pad: OMIT a part you are not sending (it stays untouched), or send the part empty to clear it`,
+      );
       return;
     }
     const max = spec.maxLength as number | undefined;
@@ -30,6 +55,14 @@ export function validateBriefPart(schema: Record<string, unknown>, name: string,
   // experiences inside the chapters array) — validate every level the schema declares.
   const checkValue = (path: string, v: unknown, spec: Record<string, unknown>): void => {
     if (spec.type === "array") {
+      // A TOP-LEVEL array sent EMPTY is a deliberate CLEAR, mirroring the scalar rule in
+      // checkString: a list with no documented entries is a valid final state, and the
+      // eraser is the only repair for a polluted list — rejecting [] forces the model to
+      // invent entries instead (observed live 2026-08-15: a fund statistic promoted into
+      // "Deal Size" was the model's answer to this exact rejection). Nested arrays stay
+      // strict: an entry is either whole or dropped.
+      const isTopLevelArrayClear = path === name && Array.isArray(v) && v.length === 0;
+      if (isTopLevelArrayClear) return;
       if (!Array.isArray(v) || v.length === 0) {
         problems.push(`${path}: missing or empty — compose the entries from your search results`);
         return;

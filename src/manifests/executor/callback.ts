@@ -74,6 +74,10 @@ export class ManifestCallbackExecutor {
       node,
       ctx,
       (e) => {
+        // A `send` row addresses another NODE, not one of this node's connectors, so it never
+        // becomes an output and never counts as one. It is delivered after the run, at the
+        // executor boundary, which is the only layer holding the execution context.
+        if (!e.emit) return;
         emitted++;
         emit({ __outputs: { [e.emit]: e.value } });
       },

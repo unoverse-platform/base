@@ -10,6 +10,7 @@ import {
   saveTokenUsageToWorkflow,
   saveMCPTraceToWorkflow,
   emitNodeOutputToWorkflow,
+  deliverToNodeInWorkflow,
 } from "./serviceCalls.js";
 import { getRedisClient } from "./redis.js";
 import { boot } from "../boot.js";
@@ -123,6 +124,15 @@ export function createNodeServiceAPI() {
       }
 
       return result;
+    },
+    /**
+     * The `send:` row's bridge for nodes running in THIS host (every manifest node). Mirrors
+     * executeNodeWithRouting above: the work happens in the workflow service, reached over the
+     * same door. `executionId` is the SENDER's own, so a node can only address nodes in the
+     * workflow it is running in.
+     */
+    deliverToNode: async (executionId: string, nodeId: string, handle: string, value: unknown, signal?: string) => {
+      await deliverToNodeInWorkflow({ executionId, nodeId, handle, value, signal });
     },
     classes: {
       PromiseNode,
