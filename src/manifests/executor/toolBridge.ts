@@ -76,13 +76,12 @@ export async function toolBridgeFor(executionContext: any): Promise<ToolBridge |
     async call(name, args) {
       const app = appInvokers.get(name);
       if (app) return stringify(await app(args));
-      // A CONVERSATION SEARCHES A THING ONCE. Exact repeats are removed here rather than
-      // asked for in the tool description, because asking did not hold. Discovery tools
-      // only, exact matches only, and never down to an empty search.
-      const sent = harness.dropRepeatedQueries(identity.conversationId, name, args, (m: string) =>
-        console.log(`[manifests] ${m}`),
-      );
-      return stringify(await api.callService(name, sent, executionContext));
+      // THE ARGUMENTS GO OUT AS THE MODEL WROTE THEM. A wire-level rewrite used to strip
+      // queries the conversation had already searched; it was removed 2026-08-16 because it
+      // silently competed with the tool descriptions for the same decision, and the
+      // descriptions are where it belongs. What a turn should search, and whether that turn
+      // wants app cards, is the MCP prompt's call — see shared/schema.yaml.
+      return stringify(await api.callService(name, args, executionContext));
     },
 
     /**

@@ -20,9 +20,13 @@
  * rather than served. Tamper evidence, not prevention: a writer who can edit the row can
  * edit the hash. It costs nothing and it catches the careless case.
  *
- * REBUILT WHOLE, EVERY TIME. An item uninstalled from the database must stop resolving,
- * and a leftover folder is indistinguishable from an installed one. So the root is
- * replaced, not merged into.
+ * RECONCILED, NOT REBUILT. An item uninstalled from the database must stop resolving, and
+ * that used to be done by deleting the whole root and rewriting every row — correct, but it
+ * meant every boot paid full disk writes for a tree that had not changed, and a request
+ * arriving mid-rewrite could watch the tree vanish under it now that the public port is
+ * bound before this runs. So: files whose contents already match are left untouched, files
+ * the rows no longer describe are pruned, and only real changes are written. The
+ * uninstall-stops-resolving rule survives in the prune pass, and the tree is never absent.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -42,6 +46,8 @@ export interface InstalledRow {
 
 export interface HydrateResult {
   written: number;
+  /** Items whose files already matched the rows byte for byte — nothing touched. */
+  unchanged: number;
   skipped: Array<{ kind: string; name: string; why: string }>;
 }
 
@@ -139,34 +145,67 @@ function frontMatter(fields: Record<string, unknown>, body: string): string {
   return lines.join("\n");
 }
 
-/** Write one row's files under `dir`. Returns false if it carried nothing usable. */
-function writeRow(row: InstalledRow, dir: string): boolean {
+/**
+ * Reconcile one row's files under `dir`: register every desired path in `keep`, write only
+ * the ones whose contents differ from what is already on disk.
+ */
+function writeRow(row: InstalledRow, dir: string, keep: Set<string>): "written" | "unchanged" | "empty" {
   const files = filesOf(row.kind, row.name, row.definition);
-  if (!files || !Object.keys(files).length) return false;
+  if (!files || !Object.keys(files).length) return "empty";
   const base = FLAT_TIERS.has(row.kind) ? dir : path.join(dir, row.name.toLowerCase());
+  let changed = false;
   for (const [rel, contents] of Object.entries(files)) {
     // A stored path is data, and `../` in it would write outside the root. Rejected
     // rather than sanitised: a definition that needs to escape its own folder is not one
     // this platform produced.
     const full = path.join(base, rel);
     if (!full.startsWith(base + path.sep) && full !== base) continue;
+    keep.add(full);
+    try {
+      if (fs.readFileSync(full, "utf8") === contents) continue;
+    } catch {
+      // Not there or unreadable: written below either way.
+    }
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, contents, "utf8");
+    changed = true;
   }
-  return true;
+  return changed ? "written" : "unchanged";
+}
+
+/** Remove files the rows no longer describe, then the empty folders that leaves behind. */
+function prune(dir: string, keep: Set<string>): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      prune(full, keep);
+      try {
+        fs.rmdirSync(full); // only succeeds once empty, which is exactly the intent
+      } catch {}
+    } else if (!keep.has(full)) {
+      fs.rmSync(full, { force: true });
+    }
+  }
 }
 
 /**
- * Replace the installed root with what these rows describe.
+ * Reconcile the installed root with what these rows describe.
  *
  * Disabled rows are LEFT OUT, not deleted-then-restored: `enabled: false` is a retraction,
  * and a retracted item must resolve to nothing exactly as an uninstalled one does. That is
- * the rule `fetchNodeRows` already applies to nodes.
+ * the rule `fetchNodeRows` already applies to nodes. Both retractions land in the prune
+ * pass — their files are simply not in `keep`.
  */
 export function hydrateInstalled(rows: InstalledRow[]): HydrateResult {
-  const result: HydrateResult = { written: 0, skipped: [] };
+  const result: HydrateResult = { written: 0, unchanged: 0, skipped: [] };
+  const keep = new Set<string>();
 
-  fs.rmSync(INSTALLED_HOME, { recursive: true, force: true });
   fs.mkdirSync(INSTALLED_HOME, { recursive: true });
 
   for (const row of rows) {
@@ -180,12 +219,16 @@ export function hydrateInstalled(rows: InstalledRow[]): HydrateResult {
       continue;
     }
 
-    if (!writeRow(row, dir)) {
+    const state = writeRow(row, dir, keep);
+    if (state === "empty") {
       result.skipped.push({ kind: row.kind, name: row.name, why: "no files in the stored definition" });
       continue;
     }
-    result.written++;
+    if (state === "written") result.written++;
+    else result.unchanged++;
   }
+
+  prune(INSTALLED_HOME, keep);
 
   return result;
 }

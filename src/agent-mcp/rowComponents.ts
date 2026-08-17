@@ -76,20 +76,23 @@ export function rowComponentsFromResults(results: unknown): RowComponent[] {
  * held call resolves immediately server-side) and a failed render never breaks the
  * conversation.
  */
-// ONCE PER CONVERSATION: overlapping searches keep re-surfacing the same rows, and
-// re-rendering them re-fired every component's onStart (external API calls, again) and
-// churned the client with redundant writes — the visible symptom was components
-// SHUFFLING while a page loaded. A row renders once per conversation; the slice already
-// exists after that, and real refinements still merge through the normal channels.
-// Bounded like the search memo.
+// ONCE PER TURN: within a single turn, overlapping searches keep re-surfacing the same
+// rows, and re-rendering them re-fires every component's onStart (external API calls,
+// again) and churns the client with redundant writes — the visible symptom was components
+// SHUFFLING while a page loaded. That is the whole problem this solves, and a turn is its
+// whole scope.
 //
-// ⚠ This is a LIFETIME rule (`turn` vs `conversation`) living in a search helper, where
-// neither the app, the template, nor the ladder can see it. Observed 2026-08-09: a fresh
-// question re-surfaced the same rows, every render was skipped, NOTHING reached the
-// client, and the screen looked like a state-model bug. The component's own manifest
-// `lifetime` is where this belongs.
-const renderedByConv = new Map<string, Set<string>>();
-const RENDERED_CONVS_MAX = 300;
+// KEYED ON THE TURN, NOT THE CONVERSATION. A render lands in a turn bubble keyed
+// `conversationId:chatId` (see the dispatch log below), so "already rendered" can only
+// ever mean "already rendered into THIS bubble". Keying it on the conversation was
+// invisible until `enableConversationMemory` shipped: with history off every run minted a
+// throwaway conversation, so the set was always empty and the bug never showed. With
+// history on the id is remembered with no TTL, the set accumulates every row the chat has
+// ever drawn, and from the second turn onward every component is skipped and NOTHING
+// reaches the client — the screen looks like a state-model bug. Observed 2026-08-09 with a
+// long-lived id, then permanently once the toggle existed.
+const renderedByTurn = new Map<string, Set<string>>();
+const RENDERED_TURNS_MAX = 300;
 
 export function renderRowComponents(
   items: RowComponent[] | undefined,
@@ -99,14 +102,17 @@ export function renderRowComponents(
   // No live session (builder/test/headless callers) → nothing to render; the
   // search stays pure automatically — no flag juggling needed by the caller.
   if (!items?.length || !ctx.userId) return;
-  let rendered = ctx.conversationId ? renderedByConv.get(ctx.conversationId) : undefined;
-  if (!rendered && ctx.conversationId) {
-    if (renderedByConv.size >= RENDERED_CONVS_MAX) {
-      const oldest = renderedByConv.keys().next().value;
-      if (oldest !== undefined) renderedByConv.delete(oldest);
+  // No chatId means no turn bubble to render into, so there is nothing to de-duplicate
+  // against either — fall through and let every row dispatch.
+  const turnKey = ctx.conversationId && ctx.chatId ? `${ctx.conversationId}:${ctx.chatId}` : undefined;
+  let rendered = turnKey ? renderedByTurn.get(turnKey) : undefined;
+  if (!rendered && turnKey) {
+    if (renderedByTurn.size >= RENDERED_TURNS_MAX) {
+      const oldest = renderedByTurn.keys().next().value;
+      if (oldest !== undefined) renderedByTurn.delete(oldest);
     }
     rendered = new Set();
-    renderedByConv.set(ctx.conversationId, rendered);
+    renderedByTurn.set(turnKey, rendered);
   }
   let skipped = 0;
   for (const item of items) {
@@ -148,13 +154,13 @@ export function renderRowComponents(
       .then(() => log?.(`🧩 RENDERED ${item.component} (${item.id})`))
       .catch((e: any) => {
         // UN-POISON on failure: the optimistic add above guards concurrent dispatch,
-        // but a failed render marked "rendered" disabled the row for the whole
-        // conversation with one transient error. A later search may retry it.
+        // but a failed render marked "rendered" disabled the row for the rest of the
+        // turn with one transient error. A later search may retry it.
         rendered?.delete(item.id);
         log?.(`🧩 FAILED ${item.component} (${item.id}) — ${e?.message ?? e}`);
       });
   }
-  if (skipped) log?.(`🧩 ${skipped} row component(s) already rendered this conversation — skipped`);
+  if (skipped) log?.(`🧩 ${skipped} row component(s) already rendered this turn — skipped`);
 }
 
 // Model-usable metadata fields — everything the calling LLM has ever actually used from

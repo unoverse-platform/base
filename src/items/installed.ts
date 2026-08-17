@@ -39,7 +39,7 @@ export async function refreshInstalled(): Promise<HydrateResult & { fetched: num
     rows = (data.items ?? []).filter((r) => HYDRATED_KINDS.includes(r.kind));
   } catch (error: any) {
     console.warn(`[unoverse:installed] could not read items (${error?.message ?? error}); keeping what is on disk`);
-    return { written: 0, skipped: [], fetched: 0 };
+    return { written: 0, unchanged: 0, skipped: [], fetched: 0 };
   }
 
   const result = hydrateInstalled(rows);
@@ -49,6 +49,6 @@ export async function refreshInstalled(): Promise<HydrateResult & { fetched: num
   clearPromptBlockCache();
 
   for (const s of result.skipped) console.warn(`[unoverse:installed] skipped ${s.kind}/${s.name}: ${s.why}`);
-  console.log(`[unoverse:installed] ${result.written} of ${rows.length} item(s) on disk`);
+  console.log(`[unoverse:installed] ${rows.length} item(s): ${result.written} updated, ${result.unchanged} already current`);
   return { ...result, fetched: rows.length };
 }

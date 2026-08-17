@@ -16,7 +16,6 @@
  * a turn ends is not scrolling past row-component rendering to find it.
  *
  *   types       the shapes, no behaviour
- *   memo        search once per conversation
  *   handoff     does this call end the turn?
  *   discovery   what spatial found, and what it unlocks
  *   rowComponents  rows that name a component, rendered rather than described
@@ -35,7 +34,6 @@ export type {
 } from "./types.js";
 
 export { DISCOVERY_TOOL_NAMES, parseDiscoveredMCPs, handleDiscoveryResult } from "./discovery.js";
-export { searchOncePerConversation, dropRepeatedQueries } from "./memo.js";
 export { parseToolResult, hasDynamicHandoff, isTurnEndingHandoff } from "./handoff.js";
 export { rowComponentsFromResults, renderRowComponents } from "./rowComponents.js";
 export { leanToolResultForModel } from "./lean.js";
