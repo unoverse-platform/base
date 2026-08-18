@@ -191,10 +191,16 @@ const flat = (v: unknown) => (Array.isArray(v) ? v.join(", ") : v);
  *
  * Phase 3 cascade ("org = just a theme"): the default set's `base`/`semantic` (the shared
  * marketplace contract) is the foundation. An org supplies only what differs — typically
- * just its `themes/<name>.json` brand file — and inherits the rest. The fallback is applied
- * PER LAYER and only when the org LACKS that layer: an org that ships its own `base`/
- * `semantic` fully replaces the default's for that layer, so existing full-set orgs resolve
- * byte-identically (verified). A theme-only org (no `base`/`semantic` folders) inherits both.
+ * just its `themes/<name>.json` brand file — and inherits the rest.
+ *
+ * The fallback is PER TOKEN, not per layer. This comment used to say the opposite ("an org
+ * that ships its own `base`/`semantic` fully replaces the default's for that layer"), which
+ * describes an earlier design and would mean an org adding one `base/color.yaml` silently
+ * lost every other base token. The body below reads foundation → org into ONE flat registry
+ * keyed by dotted path, so an org token overrides the foundation's and an org OMITS a token
+ * to inherit it. An org may therefore name a single token in a file whose siblings it wants
+ * to keep. Full forks (every default token present in the org) still resolve byte-identically,
+ * which is why both readings looked correct against the existing orgs.
  */
 function buildTheme(styles: string, themeFile: string): ResolvedTheme {
   const reg: Record<string, unknown> = {};
