@@ -182,18 +182,23 @@ function componentHit(dir: string, lower: string): boolean {
 }
 
 /** The dirs a component ref may actually load from. Qualified refs pass through
- *  untouched. A bare ref narrows to the ONE home that carries the name: marketplace
- *  wins outright (an org may never shadow it); a single org match resolves for
- *  compat with pre-org refs (saved workflows, COMPONENT_INIT `type`); a name in two
- *  or more orgs throws, naming the qualified candidates — the caller must say which
- *  org it means. */
+ *  untouched. A bare ref narrows to the ONE home that carries the name: the CONTEXT
+ *  org first when given (the org of the definition/app doing the asking — a cloned
+ *  pack's own manifests and layouts say `course-card` and mean their own), then the
+ *  marketplace (an org may never shadow it, so these two never conflict); a single
+ *  org match resolves for compat with pre-org refs (saved workflows, COMPONENT_INIT
+ *  `type`); a name in two or more orgs WITH no context throws, naming the qualified
+ *  candidates — the caller must say which org it means. */
 function resolveComponentDirs(
   dirs: { org: string | undefined; dir: string }[],
   refOrg: string | null,
   lower: string,
+  contextOrg?: string,
 ): { org: string | undefined; dir: string }[] {
   if (refOrg !== null) return dirs;
   const hits = dirs.filter(({ dir }) => componentHit(dir, lower));
+  const contextHit = contextOrg ? hits.find((h) => h.org === contextOrg) : undefined;
+  if (contextHit) return [contextHit];
   const sharedHit = hits.find((h) => h.org === undefined);
   if (sharedHit) return [sharedHit];
   if (hits.length > 1)
@@ -428,13 +433,16 @@ function applyLiterals(node: AnyNode, lits: Record<string, unknown>): void {
   if (node.cases && typeof node.cases === "object") for (const k of Object.keys(node.cases)) applyLiterals(node.cases[k] as AnyNode, lits);
 }
 
-export function expandNode(node: AnyNode): AnyNode {
+export function expandNode(node: AnyNode, contextOrg?: string): AnyNode {
   if (node?.type === "Ref") {
-    // A Ref inlines an ATOM (the usual case, rx/atoms). It also resolves a marketplace
-    // COMPONENT as a fallback, so a template can embed a shared flat component (e.g. the
+    // A Ref inlines an ATOM (the usual case, rx/atoms). It also resolves a COMPONENT
+    // as a fallback, so a template can embed a shared flat component (e.g. the
     // ComposerBar chrome) the same way it embeds an atom — the one mechanism for fixed,
     // always-present chrome. (A component's root is inlined as-is; flat components only.)
-    const atom = loadDefinition(String(node.ref), "atom") ?? loadDefinition(String(node.ref), "component");
+    // The parent definition's org rides along so a bare ref inside an org's own tree
+    // resolves to that org's component when two orgs share the name.
+    const atom =
+      loadDefinition(String(node.ref), "atom") ?? loadDefinition(String(node.ref), "component", "expanded", contextOrg);
     if (!atom?.root) return node; // unknown ref — leave the Ref (renders as a no-op)
     const root = JSON.parse(JSON.stringify(atom.root)) as AnyNode;
     remapFields(root, (node.props ?? {}) as Record<string, string>);
@@ -444,28 +452,28 @@ export function expandNode(node: AnyNode): AnyNode {
     // (e.g. each wizard step's option sets different fields). Parallel to style/visibleWhen.
     if (node.action) root.action = node.action;
     if (node.style) root.style = { ...(root.style ?? {}), ...node.style };
-    return expandNode(root); // expand nested refs too
+    return expandNode(root, contextOrg); // expand nested refs too
   }
-  if (Array.isArray(node?.children)) node.children = node.children.map(expandNode);
+  if (Array.isArray(node?.children)) node.children = node.children.map((c: AnyNode) => expandNode(c, contextOrg));
   // `Each` carries a per-item subtree in `template` (not `children`) — expand it too,
   // so an atom `Ref` inside a repeated item is inlined like anywhere else.
-  if (node?.template) node.template = expandNode(node.template);
+  if (node?.template) node.template = expandNode(node.template, contextOrg);
   // `Switch` carries its branches in `cases` (a value→subtree map) — expand each, so an
   // atom `Ref` inside a Switch branch is inlined like anywhere else (else the branch
   // renders blank). Parallel to children/template.
   if (node?.cases && typeof node.cases === "object") {
-    for (const k of Object.keys(node.cases)) node.cases[k] = expandNode(node.cases[k] as AnyNode);
+    for (const k of Object.keys(node.cases)) node.cases[k] = expandNode(node.cases[k] as AnyNode, contextOrg);
   }
   // `ComponentSlot` carries chrome in `frame` (born when the slot matches) and `fallback`
   // (shown when it doesn't) — both are real child slots, so an atom `Ref` inside them (e.g. a
   // ✕ CloseButton on a rail/panel frame) must inline like anywhere else, else the Ref survives.
-  if (node?.frame) node.frame = expandNode(node.frame as AnyNode);
-  if (node?.fallback) node.fallback = expandNode(node.fallback as AnyNode);
+  if (node?.frame) node.frame = expandNode(node.frame as AnyNode, contextOrg);
+  if (node?.fallback) node.fallback = expandNode(node.fallback as AnyNode, contextOrg);
   return node;
 }
 
-function expandRefs(def: UnoverseDefinition): UnoverseDefinition {
-  if (def?.root) def.root = expandNode(def.root as AnyNode);
+function expandRefs(def: UnoverseDefinition, contextOrg?: string): UnoverseDefinition {
+  if (def?.root) def.root = expandNode(def.root as AnyNode, contextOrg ?? def.org);
   return def;
 }
 
@@ -489,7 +497,7 @@ function expandRefs(def: UnoverseDefinition): UnoverseDefinition {
  * one appears. Callers ask for this form explicitly, so anything that has not been updated
  * keeps receiving fully inlined trees and cannot be broken by a server upgrade.
  */
-export function referencedDefinition(def: UnoverseDefinition): UnoverseDefinition {
+export function referencedDefinition(def: UnoverseDefinition, contextOrg?: string): UnoverseDefinition {
   const defs: Record<string, AnyNode> = {};
   // Depth-first over the tree, collecting each named atom ONCE. An atom may itself Ref
   // another, so collected atoms are walked too — otherwise the client resolves an atom
@@ -506,7 +514,8 @@ export function referencedDefinition(def: UnoverseDefinition): UnoverseDefinitio
         // EXPANDED instead was the difference between product-card costing 17 KB + 173 KB
         // and 17 KB + a handful: it references `document`, and an expanded document drags
         // in every copy this exists to remove.
-        const piece = loadDefinition(name, "atom", "referenced") ?? loadDefinition(name, "component", "referenced");
+        const piece =
+          loadDefinition(name, "atom", "referenced") ?? loadDefinition(name, "component", "referenced", contextOrg ?? def.org);
         if (piece?.root) {
           defs[name] = piece.root as AnyNode;
           for (const [k, v] of Object.entries((piece.defs ?? {}) as Record<string, AnyNode>)) if (!(k in defs)) defs[k] = v;
@@ -651,9 +660,15 @@ export function loadDefinition(
   /** "referenced" keeps `Ref` nodes and ships each named atom once in `defs`, for clients
    *  that resolve references themselves. Default inlines every Ref, as it always has. */
   mode: "expanded" | "referenced" = "expanded",
+  /** The org of the definition/app doing the asking. A bare component ref resolves in
+   *  this org first (a cloned pack's own refs mean its own components) — without it a
+   *  name two orgs share is an error rather than a guess. */
+  contextOrg?: string,
 ): UnoverseDefinition | null {
-  // The two forms are memoized separately: same inputs, different output.
-  const form = (d: UnoverseDefinition) => (mode === "referenced" ? referencedDefinition(d) : expandRefs(d));
+  // The two forms are memoized separately: same inputs, different output. Expansion
+  // reads the def's own org (stamped before form runs) so nested bare refs resolve
+  // within the def's org first.
+  const form = (d: UnoverseDefinition) => (mode === "referenced" ? referencedDefinition(d, d.org) : expandRefs(d));
   const suffix = mode === "referenced" ? ":ref" : "";
   // Default lookup is for SERVED kinds only (component/template). Atoms are
   // internal — load them explicitly with kind: "atom" from the composition resolver.
@@ -665,7 +680,7 @@ export function loadDefinition(
     // org packs). Templates live per org — search the ref's org (or all, bare).
     const dirs =
       k === "template" ? templateDirs(refOrg)
-      : k === "component" ? resolveComponentDirs(componentDirs(refOrg), refOrg, lower)
+      : k === "component" ? resolveComponentDirs(componentDirs(refOrg), refOrg, lower, contextOrg)
       : [{ org: undefined as string | undefined, dir: SHARED_DIR[k] }];
     for (const { org, dir } of dirs) {
       // Flat form: <name>.{yaml,json}. The cached parse is SHARED — clone before expanding
@@ -685,7 +700,10 @@ export function loadDefinition(
           return cachedBySignature(`def:atom:${lower}${suffix}`, sig, () => form(structuredClone(raw)));
         }
         const sig = `${path}:${statSync(path).mtimeMs};${dirSignature([SHARED_DIR.atom, SHARED_DIR.component])}`;
-        return cachedBySignature(`def:${k}:${org ?? ""}:${lower}${suffix}`, sig, () => ({ ...form(structuredClone(raw)), ...(org ? { org } : {}) }));
+        // The org is stamped BEFORE form so expansion knows whose tree it is walking
+        // (bare nested refs resolve in the def's own org first).
+        return cachedBySignature(`def:${k}:${org ?? ""}:${lower}${suffix}`, sig, () =>
+          form(Object.assign(structuredClone(raw), org ? { org } : {})));
       }
       // Folder form: <name>/<name>.{yaml,json} (+ $include sibling files, states/, …).
       // A TEMPLATE folder needs no envelope at all: the manifest IS the metadata and
