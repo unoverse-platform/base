@@ -97,8 +97,21 @@ export function collectProject(rxHome: string, project: string): CollectedItem[]
   const base_version = designSystemVersion(designSystemDir(rxHome));
 
   const items: CollectedItem[] = [];
+  // A COMPONENT row's name is the qualified ref (`<org>/<name>`): the items table's
+  // identity is (kind, name) with no org in the key, and component names are unique
+  // only WITHIN an org — two orgs may ship `course-card`, so the org must be in the
+  // name for the rows to coexist (the same trick a style row already uses: its name
+  // IS the org). Templates keep their bare ids: those are org-qualified by
+  // convention (`<org>-chat-layout`). docs/unoverse/UNOVERSE_COMPONENT_ORGS.md.
   const add = (kind: string, name: string, definition: { files: Record<string, string> }) =>
-    items.push({ kind, name, definition, fingerprint: fingerprintOf(definition), org: project, base_version });
+    items.push({
+      kind,
+      name: kind === "component" ? `${project}/${name}` : name,
+      definition,
+      fingerprint: fingerprintOf(definition),
+      org: project,
+      base_version,
+    });
 
   // `templates` publishes as kind `template`, NOT `recipe`. A recipe is a workflow graph
   // that is copied onto a canvas and never installed; an app is installed and tracked, so

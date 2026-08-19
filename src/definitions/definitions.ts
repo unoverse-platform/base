@@ -162,9 +162,12 @@ function templateDirs(refOrg: string | null): { org: string; dir: string }[] {
 /** The component homes a ref resolves against. Components live in TWO tiers: the
  *  marketplace (`rx/components`, generic, every org may use) and the org packs
  *  (`rx/orgs/<org>/components`, the client's own microapps — org-private). Names are
- *  UNIQUE across all tiers (lint-enforced), so a bare ref is unambiguous: the shared
- *  home first, then every org's. An org-prefixed ref searches its org first (shared
- *  last, as compat for prefixed refs to universal names). */
+ *  unique WITHIN a tier, and an org may never shadow a marketplace name, so a bare
+ *  ref resolves the shared home first, then the orgs; TWO orgs may carry the same
+ *  name (each addressed `<org>/<name>`), so a bare ref matching more than one org is
+ *  AMBIGUOUS — resolveComponentDirs turns that into a loud error, never first-wins.
+ *  An org-prefixed ref searches its org first (shared last, as compat for prefixed
+ *  refs to universal names). */
 function componentDirs(refOrg: string | null): { org: string | undefined; dir: string }[] {
   const shared = { org: undefined as string | undefined, dir: SHARED_DIR.component };
   const orgDirs = (refOrg === null ? listOrgs() : [refOrg])
@@ -173,13 +176,41 @@ function componentDirs(refOrg: string | null): { org: string | undefined; dir: s
   return refOrg === null ? [shared, ...orgDirs] : [...orgDirs, shared];
 }
 
-/** Resolve a component id (either tier) to its ON-DISK FOLDER — the home of its
- *  manifest and any lifecycle handler files (onstart.js …). Names are unique across
- *  tiers, so the bare id is unambiguous. Returns null for a flat/marketplace component
- *  with no folder. Used by the MCP render path to run component lifecycle handlers. */
+/** True when `dir` holds the component `<lower>` in either authored form. */
+function componentHit(dir: string, lower: string): boolean {
+  return !!defPath(dir, lower) || !!defPath(join(dir, lower), lower);
+}
+
+/** The dirs a component ref may actually load from. Qualified refs pass through
+ *  untouched. A bare ref narrows to the ONE home that carries the name: marketplace
+ *  wins outright (an org may never shadow it); a single org match resolves for
+ *  compat with pre-org refs (saved workflows, COMPONENT_INIT `type`); a name in two
+ *  or more orgs throws, naming the qualified candidates — the caller must say which
+ *  org it means. */
+function resolveComponentDirs(
+  dirs: { org: string | undefined; dir: string }[],
+  refOrg: string | null,
+  lower: string,
+): { org: string | undefined; dir: string }[] {
+  if (refOrg !== null) return dirs;
+  const hits = dirs.filter(({ dir }) => componentHit(dir, lower));
+  const sharedHit = hits.find((h) => h.org === undefined);
+  if (sharedHit) return [sharedHit];
+  if (hits.length > 1)
+    throw new Error(
+      `component ref "${lower}" is ambiguous: it exists in ${hits.map((h) => `${h.org}/${lower}`).join(", ")}. Use the org-qualified ref.`,
+    );
+  return hits.length === 1 ? hits : dirs;
+}
+
+/** Resolve a component ref (bare or `<org>/<name>`, either tier) to its ON-DISK
+ *  FOLDER — the home of its manifest and any lifecycle handler files (onstart.js …).
+ *  Returns null for a flat/marketplace component with no folder. Used by the MCP
+ *  render path to run component lifecycle handlers. */
 export function componentFolder(ref: string): string | null {
-  const lower = ref.toLowerCase();
-  for (const { dir } of componentDirs(null)) {
+  const { org: refOrg, name } = parseRef(ref);
+  const lower = name.toLowerCase();
+  for (const { dir } of resolveComponentDirs(componentDirs(refOrg), refOrg, lower)) {
     const folder = join(dir, lower);
     if (defPath(folder, "manifest") || defPath(folder, lower)) return folder;
   }
@@ -634,7 +665,7 @@ export function loadDefinition(
     // org packs). Templates live per org — search the ref's org (or all, bare).
     const dirs =
       k === "template" ? templateDirs(refOrg)
-      : k === "component" ? componentDirs(refOrg)
+      : k === "component" ? resolveComponentDirs(componentDirs(refOrg), refOrg, lower)
       : [{ org: undefined as string | undefined, dir: SHARED_DIR[k] }];
     for (const { org, dir } of dirs) {
       // Flat form: <name>.{yaml,json}. The cached parse is SHARED — clone before expanding
@@ -1024,7 +1055,8 @@ function findFolder(kind: "component" | "template" | "atom", ref: string): { fol
     const folder = join(SHARED_DIR.atom, lower);
     return existsSync(folder) && statSync(folder).isDirectory() ? { folder } : null;
   }
-  const dirs = kind === "template" ? templateDirs(refOrg) : componentDirs(refOrg);
+  const dirs =
+    kind === "template" ? templateDirs(refOrg) : resolveComponentDirs(componentDirs(refOrg), refOrg, lower);
   for (const { org, dir } of dirs) {
     const folder = join(dir, lower);
     if (existsSync(folder) && statSync(folder).isDirectory()) return { folder, ...(org ? { org } : {}) };

@@ -152,7 +152,11 @@ function frontMatter(fields: Record<string, unknown>, body: string): string {
 function writeRow(row: InstalledRow, dir: string, keep: Set<string>): "written" | "unchanged" | "empty" {
   const files = filesOf(row.kind, row.name, row.definition);
   if (!files || !Object.keys(files).length) return "empty";
-  const base = FLAT_TIERS.has(row.kind) ? dir : path.join(dir, row.name.toLowerCase());
+  // A component row's name is the QUALIFIED ref (`<org>/<name>` — collect.ts); the
+  // org is already the folder tier (`.installed/rx/<org>/components`), so only the
+  // bare segment names the folder on disk.
+  const folderName = row.name.split("/").pop() ?? row.name;
+  const base = FLAT_TIERS.has(row.kind) ? dir : path.join(dir, folderName.toLowerCase());
   let changed = false;
   for (const [rel, contents] of Object.entries(files)) {
     // A stored path is data, and `../` in it would write outside the root. Rejected

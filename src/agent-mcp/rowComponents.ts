@@ -169,7 +169,10 @@ export function renderRowComponents(
 // BEFORE this projection is applied — and were costing ~100k tokens per search in the
 // model's thread (observed live: context-window overflow on the first refinement turn).
 
-/** `unoverse://components/journey-finder` → `journey-finder` (the render type). */
+/** `unoverse://components/journey-finder` → `journey-finder`;
+ *  `unoverse://components/bpp/journey-finder` → `bpp/journey-finder` (the render ref).
+ *  The org survives: names are unique only within a tier, so stripping to the last
+ *  segment would collapse two orgs' same-named components into one ambiguous type. */
 export function componentTypeFromAppUri(app: string): string {
-  return String(app).split("/").pop() || "";
+  return String(app).replace(/^unoverse:\/\/components\//, "").replace(/^\/+|\/+$/g, "");
 }

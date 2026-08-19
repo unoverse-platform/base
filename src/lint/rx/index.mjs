@@ -540,27 +540,34 @@ for (const orgDir of orgDirs) {
   }
 }
 
-// ── component-name uniqueness across tiers (the no-shadowing law) ──
-// Names are the addressing contract: a bare `unoverse://components/<name>` must be
-// unambiguous, so ONE name may exist in exactly one home (marketplace OR one org).
+// ── component-name uniqueness (per tier, no marketplace shadowing) ──
+// Names are unique WITHIN a home: two orgs may ship the same name (each addressed
+// `unoverse://components/<org>/<name>` — docs/unoverse/UNOVERSE_COMPONENT_ORGS.md),
+// but an org may never SHADOW a marketplace name, so a bare ref stays unambiguous:
+// bare = the marketplace tier, or the single org that carries the name.
 {
-  const seenNames = new Map(); // lower-name -> first home path
-  const componentHomes = [join(DS, "components")];
-  for (const orgDir of orgDirs) {
-    const d = join(orgDir, "components");
-    if (existsSync(d) && statSync(d).isDirectory()) componentHomes.push(d);
-  }
-  for (const home of componentHomes) {
-    if (!existsSync(home)) continue;
+  const marketplaceNames = new Map(); // lower-name -> path in the marketplace tier
+  const dsHome = join(DS, "components");
+  const namesIn = (home) => {
+    const out = new Map(); // lower-name -> path
+    if (!existsSync(home)) return out;
     for (const e of readdirSync(home)) {
       if (e.startsWith(".")) continue;
       const p = join(home, e);
       const name = (statSync(p).isDirectory() ? e : isDefFile(e) ? defName(e) : null)?.toLowerCase();
       if (!name) continue;
-      const first = seenNames.get(name);
-      if (first)
-        report("error", p, `component name "${name}" already exists at ${relative(RX, first)}. Names are UNIQUE across the marketplace and every org (no shadowing); rename one`);
-      else seenNames.set(name, p);
+      if (out.has(name))
+        report("error", p, `component name "${name}" already exists at ${relative(RX, out.get(name))}. Names are UNIQUE within a home; rename one`);
+      else out.set(name, p);
+    }
+    return out;
+  };
+  for (const [name, p] of namesIn(dsHome)) marketplaceNames.set(name, p);
+  for (const orgDir of orgDirs) {
+    for (const [name, p] of namesIn(join(orgDir, "components"))) {
+      const shadowed = marketplaceNames.get(name);
+      if (shadowed)
+        report("error", p, `component name "${name}" shadows the marketplace component at ${relative(RX, shadowed)}. An org may never shadow a marketplace name (bare refs must stay unambiguous); rename the org component`);
     }
   }
 }
