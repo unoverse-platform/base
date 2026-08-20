@@ -1,7 +1,7 @@
 /**
  * Watch node manifests and reload them on change. Development only.
  *
- * A manifest is data, so editing one should behave like editing rx/ — save the file,
+ * A manifest is data, so editing one should behave like editing design/ — save the file,
  * see the change. Needing a restart would make the format feel worse than the code it
  * replaces, when the whole argument for it is that data can move without a deploy.
  *

@@ -1,0 +1,62 @@
+{
+  "$id": "https://unoverse/workflow/workflow.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow document",
+  "description": "The logic half of a workflow (docs/architecture/WORKFLOW_DOCUMENT.md). Everything the engine needs to run; nothing the canvas needs to draw. Presentation fields (positions, viewport, edge styling) are REJECTED here by additionalProperties — the split is enforced by the schema, not by convention.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "nodes", "edges"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "executionMode": { "enum": ["sequential", "experience"] },
+    "memoryConfig": { "type": "object" },
+    "testInputs": {},
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "label": { "type": "string" },
+        "config": { "type": "object" },
+        "credentials": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "testInputs": {},
+        "unoManaged": { "type": "boolean" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "target"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "sourceHandle": { "type": "string" },
+        "targetHandle": { "type": "string" },
+        "kind": { "enum": ["data", "service"] },
+        "serviceType": { "type": "string", "minLength": 1 },
+        "methods": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

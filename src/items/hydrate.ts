@@ -7,7 +7,7 @@
  * implementation of those rules, and the two would disagree the first time either changed.
  * Writing the files back out means there is still ONE resolver, reading one kind of thing.
  *
- * NEVER INTO rx/. In the monorepo `RX_HOME` is somebody's authoring tree; hydrating there
+ * NEVER INTO the design tree. In the monorepo `DESIGN_HOME` is somebody's authoring tree; hydrating there
  * would overwrite work in progress with whatever a database happened to hold. Rows land in
  * their own root, and `definitions.ts` searches it only AFTER the on-disk tiers, so a local
  * definition still wins exactly as it did — the same precedence the node loader applies
@@ -31,7 +31,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { fingerprintOf } from "./fingerprint.js";
-import { INSTALLED_HOME } from "../paths.js";
+import { INSTALLED_HOME, designDir } from "../paths.js";
 
 /** One row, as `GET /items` returns it. */
 export interface InstalledRow {
@@ -55,7 +55,7 @@ export interface HydrateResult {
  *  the resolver already knows that layout and must not learn a second one. */
 function targetDir(row: InstalledRow): string | null {
   const org = row.org?.trim() || null;
-  const rx = path.join(INSTALLED_HOME, "rx");
+  const rx = designDir(INSTALLED_HOME);
   switch (row.kind) {
     // Org-owned tiers: a project folder, exactly as `projectDir` expects one.
     case "component":

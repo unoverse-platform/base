@@ -33,15 +33,15 @@ export interface PublishPlan {
 /**
  * Lint a project, returning findings. Errors mean nothing is sent.
  *
- * The rx linter needs the whole rx home, not one project: a developer's components are
+ * The design linter needs the whole design home, not one project: a developer's components are
  * built ON TOP of the design system, so linting a project in isolation resolves every
  * shared atom against nothing. It reports on all projects; we keep the findings for this
  * one, plus anything about the tree itself.
  */
-export async function lintForPublish(rxHome: string, project: string): Promise<{ problems: Finding[]; errors: Finding[] }> {
-  const { lintDefinitions } = await import("../lint/rx/index.mjs");
-  const result = lintDefinitions(rxHome);
-  const mine = result.problems.filter((p: Finding) => !p.file || p.file.includes(`/${project}/`) || !p.file.includes("/rx/"));
+export async function lintForPublish(designRoot: string, project: string): Promise<{ problems: Finding[]; errors: Finding[] }> {
+  const { lintDefinitions } = await import("../lint/design/index.mjs");
+  const result = lintDefinitions(designRoot);
+  const mine = result.problems.filter((p: Finding) => !p.file || p.file.includes(`/${project}/`) || !p.file.includes("/design/"));
   return { problems: mine, errors: mine.filter((p: Finding) => p.level === "error") };
 }
 

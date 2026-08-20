@@ -1,0 +1,206 @@
+/**
+ * The workflow document and its layout overlay — types and validation.
+ * Design record: docs/architecture/WORKFLOW_DOCUMENT.md.
+ *
+ * A workflow is TWO documents. The workflow document is the logic (nodes, edges, config,
+ * wiring) and is the workflow's identity. The layout document is an optional presentation
+ * overlay (positions, viewport) joined by node id; absent, the canvas computes a layout.
+ *
+ * Validation has two tiers, same shape as the node linter:
+ *   1. JSON Schema (_schema/*.json) catches shape — including the split itself:
+ *      `additionalProperties: false` REJECTS a position on a workflow node, so
+ *      presentation cannot leak back into the logic document.
+ *   2. Graph rules a schema cannot express: unique ids, edges that reference real nodes,
+ *      service edges that name their contract, an overlay that maps real nodes.
+ *
+ * Validation says nothing about whether node TYPES resolve — that is the registry's job
+ * (the runtime preflight / status self-check), not the document's.
+ */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+const require_ = createRequire(import.meta.url);
+let Validator: any;
+try {
+  ({ Validator } = require_("@cfworker/json-schema"));
+} catch {
+  throw new Error("workflow document validation needs @cfworker/json-schema");
+}
+
+// ---------------------------------------------------------------------------
+// Types — the wire shape of the two documents
+// ---------------------------------------------------------------------------
+
+export interface WorkflowDocumentNode {
+  id: string;
+  type: string;
+  label?: string;
+  config?: Record<string, unknown>;
+  credentials?: Record<string, string>;
+  /** Authored per-node test inputs (a saved debug prompt is authored content, not residue). */
+  testInputs?: unknown;
+  /** Copilot marker: this node is managed by UNO. Authoring metadata, kept with the logic. */
+  unoManaged?: boolean;
+}
+
+export interface WorkflowDocumentEdge {
+  id?: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  /** Omitted means "data" — the common case reads clean. */
+  kind?: "data" | "service";
+  serviceType?: string;
+  methods?: string[];
+}
+
+export interface WorkflowDocument {
+  schemaVersion: 1;
+  name: string;
+  description?: string;
+  executionMode?: "sequential" | "experience";
+  memoryConfig?: Record<string, unknown>;
+  testInputs?: unknown;
+  nodes: WorkflowDocumentNode[];
+  edges: WorkflowDocumentEdge[];
+}
+
+export interface LayoutNodePlacement {
+  x: number;
+  y: number;
+  /** User-sized nodes (notes, resized components) keep their dimensions. */
+  width?: number;
+  height?: number;
+}
+
+export interface LayoutEdgePresentation {
+  /** The canvas edge renderer (smoothstep, orthogonal, …). Legacy rows carry this in edge.type. */
+  renderer?: string;
+  /** Routed waypoints for orthogonal edges. Legacy rows carry these in edge.data.points. */
+  points?: Array<{ x: number; y: number }>;
+}
+
+export interface LayoutDocument {
+  schemaVersion: 1;
+  viewport?: { x: number; y: number; zoom: number };
+  nodes: Record<string, LayoutNodePlacement>;
+  /** Keyed by edge id — presentation of edges that carry any. */
+  edges?: Record<string, LayoutEdgePresentation>;
+}
+
+export interface DocumentProblem {
+  path: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  problems: DocumentProblem[];
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1 — shape, from the JSON Schemas
+// ---------------------------------------------------------------------------
+
+const schemaDir = join(dirname(fileURLToPath(import.meta.url)), "_schema");
+
+function loadSchema(file: string): any {
+  return JSON.parse(readFileSync(join(schemaDir, file), "utf8"));
+}
+
+let workflowValidator: any = null;
+let layoutValidator: any = null;
+
+function shapeProblems(validator: any, doc: unknown): DocumentProblem[] {
+  const result = validator.validate(doc);
+  if (result.valid) return [];
+  return result.errors.map((e: any) => ({
+    path: e.instanceLocation?.replace(/^#\/?/, "") || "(document)",
+    message: e.error,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2 — graph rules
+// ---------------------------------------------------------------------------
+
+function workflowGraphProblems(doc: WorkflowDocument): DocumentProblem[] {
+  const problems: DocumentProblem[] = [];
+
+  const ids = new Set<string>();
+  doc.nodes.forEach((node, i) => {
+    if (ids.has(node.id)) {
+      problems.push({ path: `nodes/${i}`, message: `duplicate node id "${node.id}"` });
+    }
+    ids.add(node.id);
+  });
+
+  doc.edges.forEach((edge, i) => {
+    if (!ids.has(edge.source)) {
+      problems.push({ path: `edges/${i}`, message: `edge source "${edge.source}" is not a node in this document` });
+    }
+    if (!ids.has(edge.target)) {
+      problems.push({ path: `edges/${i}`, message: `edge target "${edge.target}" is not a node in this document` });
+    }
+    if (edge.kind === "service") {
+      // serviceType/methods are OPTIONAL on a service edge. Verified against real rows and
+      // the compiler (2026-08-20): no production service edge carries them, and
+      // RouteTableBuilder/serializeArtifact never read them — the grant is the edge itself,
+      // and tool discovery aggregates the provider's schema at runtime.
+    } else {
+      if (edge.serviceType !== undefined || edge.methods !== undefined) {
+        problems.push({
+          path: `edges/${i}`,
+          message: 'serviceType/methods belong only on a service edge (kind: "service")',
+        });
+      }
+    }
+  });
+
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
+// Public surface
+// ---------------------------------------------------------------------------
+
+/** Validate a workflow document: shape first, graph rules only when the shape holds. */
+export function validateWorkflowDocument(doc: unknown): ValidationResult {
+  if (!workflowValidator) workflowValidator = new Validator(loadSchema("workflow.schema.json"), "2020-12", false);
+  const shape = shapeProblems(workflowValidator, doc);
+  if (shape.length > 0) return { ok: false, problems: shape };
+  const graph = workflowGraphProblems(doc as WorkflowDocument);
+  return { ok: graph.length === 0, problems: graph };
+}
+
+/** Validate a layout document alone (shape only — it needs no graph). */
+export function validateLayoutDocument(doc: unknown): ValidationResult {
+  if (!layoutValidator) layoutValidator = new Validator(loadSchema("layout.schema.json"), "2020-12", false);
+  const shape = shapeProblems(layoutValidator, doc);
+  return { ok: shape.length === 0, problems: shape };
+}
+
+/**
+ * Validate a layout AGAINST its workflow document. An overlay entry for a node the
+ * workflow does not contain is stale (the join key broke) — an error, because silently
+ * ignoring it hides the drift copy/paste and deletes leave behind.
+ */
+export function validateLayoutAgainstWorkflow(layout: LayoutDocument, workflow: WorkflowDocument): ValidationResult {
+  const ids = new Set(workflow.nodes.map((n) => n.id));
+  const problems: DocumentProblem[] = [];
+  for (const nodeId of Object.keys(layout.nodes)) {
+    if (!ids.has(nodeId)) {
+      problems.push({ path: `nodes/${nodeId}`, message: `layout positions node "${nodeId}", which the workflow does not contain` });
+    }
+  }
+  const edgeIds = new Set(workflow.edges.map((e) => e.id).filter(Boolean));
+  for (const edgeId of Object.keys(layout.edges ?? {})) {
+    if (!edgeIds.has(edgeId)) {
+      problems.push({ path: `edges/${edgeId}`, message: `layout styles edge "${edgeId}", which the workflow does not contain` });
+    }
+  }
+  return { ok: problems.length === 0, problems };
+}

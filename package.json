@@ -1,6 +1,6 @@
 {
   "name": "@unoverse-platform/base",
-  "version": "0.3.35",
+  "version": "0.3.36",
   "description": "The Unoverse YAML runtime: node manifests, rx definitions, and the platform surface a node sees",
   "license": "MIT",
   "repository": {
@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",
+    "@cfworker/json-schema": "^4.1.1",
     "@aws-sdk/util-dynamodb": "^3.996.7",
     "@smithy/protocol-http": "^5.5.14",
     "@smithy/signature-v4": "^5.6.10",
@@ -49,6 +50,7 @@
     "gray-matter": "^4.0.3",
     "handlebars": "^4.7.8",
     "ioredis": "^5.3.0",
+    "jose": "^5.9.6",
     "lucide": "^1.21.0",
     "ws": "^8.18.0",
     "yaml": "^2.8.1"
@@ -77,6 +79,15 @@
     "url": "https://github.com/unoverse-platform/base/issues"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.13"
+    "@types/ws": "^8.5.13",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.44.0"
+  },
+  "peerDependencies": {
+    "uWebSockets.js": "*"
+  },
+  "peerDependenciesMeta": {
+    "uWebSockets.js": {
+      "optional": true
+    }
   }
 }

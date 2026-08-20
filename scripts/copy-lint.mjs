@@ -5,7 +5,7 @@
  * The two linters are plain JavaScript (.mjs) so the CLIs can run them under bare node with
  * no build step, which is why `unoverse lint` works in a fresh clone. `tsc` does not process
  * or emit .mjs, so `npm run build` produced a dist where `items/publish.js` imports
- * `../lint/rx/index.mjs` and that folder does not exist.
+ * `../lint/design/index.mjs` and that folder does not exist.
  *
  * Installed, that is a runtime failure on the first lint: the package resolves, the import
  * throws, and nothing catches it at publish time because the source tree looks complete.
@@ -32,3 +32,14 @@ cpSync(src, out, {
   filter: (from) => !/\.(ts|tsx)$/.test(from) || from.endsWith(".d.mts"),
 });
 console.log("[copy-lint] src/lint → dist/lint");
+
+// The workflow-document schemas are JSON files read at runtime relative to the module
+// (workflow/document.ts). tsc emits no .json, so without this copy the installed package
+// throws on the first validate — the same failure mode the lint copy exists to prevent.
+const schemaSrc = join(pkg, "src/workflow/_schema");
+const schemaOut = join(pkg, "dist/workflow/_schema");
+if (existsSync(schemaSrc)) {
+  mkdirSync(schemaOut, { recursive: true });
+  cpSync(schemaSrc, schemaOut, { recursive: true });
+  console.log("[copy-lint] src/workflow/_schema → dist/workflow/_schema");
+}

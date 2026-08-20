@@ -37,9 +37,9 @@ export function reset(nodesHome, schemaDir) {
 /**
  * One finding. `error` fails a build; `warn` and `hint` inform.
  *
- * DEDUPED. The rx linter walks a definition and its expansions, so the same rule can fire
+ * DEDUPED. The design linter walks a definition and its expansions, so the same rule can fire
  * on the same line twice; a caller seeing it twice would think there were two problems.
- * `line` is optional: rx knows where in the file, the node linter reports per file.
+ * `line` is optional: the design linter knows where in the file, the node linter reports per file.
  */
 const seen = new Set();
 export const report = (level, file, msg, line) => {

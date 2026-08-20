@@ -1,5 +1,5 @@
 /**
- * Unoverse definition store (v0: flat JSON files under apps/unoverse/rx/{components,templates}).
+ * Unoverse definition store (v0: flat JSON files under apps/unoverse/design/{components,templates}).
  *
  * These are the NEUTRAL primitive+style definitions — NOT the legacy
  * React UMD bundles in packages/design-system/components. Later this
@@ -11,7 +11,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { packagedDesignSystem } from "./dsPackage.js";
 import { readDefCached, defPath, isDefFile, defName, dirSignature, cachedBySignature } from "./fsCache.js";
-import { NODES_HOME, PLUGINS_DIR, RX_HOME, INSTALLED_HOME, databaseOnly } from "../paths.js";
+import { NODES_HOME, PLUGINS_DIR, DESIGN_HOME, INSTALLED_HOME, databaseOnly, designDir } from "../paths.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // server/src -> apps/unoverse
@@ -32,8 +32,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // The filesystem stays the registry: a new client = a new folder under rx/orgs/.
 // One home for the definitions root (paths.ts), so this loader and theme.ts
 // cannot drift, and the standalone local Studio can point both at a dev folder.
-const RX = RX_HOME;
-const ORGS_ROOT = join(RX, "orgs");
+const DESIGN = DESIGN_HOME;
+const ORGS_ROOT = join(DESIGN, "orgs");
 
 /**
  * The rx tree HYDRATED FROM INSTALLED ROWS (items/hydrate.ts), laid out identically.
@@ -47,7 +47,7 @@ const ORGS_ROOT = join(RX, "orgs");
  * On a deployed universe the disk tiers are empty by design, so this is the only tier
  * with anything in it and the ordering never comes up.
  */
-const INSTALLED_RX = join(INSTALLED_HOME, "rx");
+const INSTALLED_DESIGN = designDir(INSTALLED_HOME);
 
 /** The shared homes for the universal kinds — the marketplace.
  *
@@ -58,7 +58,7 @@ const INSTALLED_RX = join(INSTALLED_HOME, "rx");
  * components/atoms with NO rx/marketplace/ source on disk (the marketplace-installed,
  * pushable-update model). Mirrors theme.ts's styles fallback. Getters resolve LAZILY so a
  * package installed at boot (CORE_PACKAGES self-heal) is picked up on first use. */
-const MARKETPLACE = join(RX, "marketplace");
+const MARKETPLACE = join(DESIGN, "marketplace");
 const DS_BUNDLE_CANDIDATES = [
   join(NODES_HOME, "marketplace", "definitions"),
   join(PLUGINS_DIR, "node_modules", "@unoverse-platform", "marketplace", "definitions"),
@@ -68,7 +68,7 @@ function marketplaceDir(kind: "components" | "atoms"): string {
   // Under the switch the authored tiers are skipped, so what a deployed universe would
   // resolve is what a developer resolves.
   if (databaseOnly()) {
-    const installed = join(INSTALLED_RX, "marketplace", kind);
+    const installed = join(INSTALLED_DESIGN, "marketplace", kind);
     return existsSync(installed) ? installed : onDisk;
   }
   if (existsSync(onDisk)) return onDisk;
@@ -78,7 +78,7 @@ function marketplaceDir(kind: "components" | "atoms"): string {
   }
   // Last: what this universe was PUBLISHED. A deployed universe holds no rx and no
   // bundle, so this is where its design system actually lives.
-  const installed = join(INSTALLED_RX, "marketplace", kind);
+  const installed = join(INSTALLED_DESIGN, "marketplace", kind);
   if (existsSync(installed)) return installed;
   const packaged = packagedDesignSystem();
   if (packaged && existsSync(join(packaged, kind))) return join(packaged, kind);
@@ -95,21 +95,21 @@ const SHARED_DIR = {
 
 // rx-root entries that are NOT projects: the marketplace, the schema, and the legacy
 // orgs/ container itself. Everything else at the root is a flat project (the target model).
-const RESERVED_RX = new Set(["marketplace", "_schema"]);
+const RESERVED_DESIGN = new Set(["marketplace", "_schema"]);
 
 /** A project's on-disk home. During the flatten migration a project can live either FLAT
  *  at the rx root (`rx/<name>` — the target) or under the legacy `rx/orgs/<name>`. Flat
  *  wins. A project folder carries at least one of styles/templates/components. */
 export function projectDir(name: string): string {
-  const installedProject = join(INSTALLED_RX, name);
+  const installedProject = join(INSTALLED_DESIGN, name);
   if (databaseOnly()) return installedProject;
-  const flat = join(RX, name);
+  const flat = join(DESIGN, name);
   if (existsSync(flat)) return flat;
   const legacy = join(ORGS_ROOT, name);
   if (existsSync(legacy)) return legacy;
   // Published, not authored here. Checked after both on-disk homes so a project being
   // edited in the monorepo is never shadowed by the database's copy of it.
-  const installed = join(INSTALLED_RX, name);
+  const installed = join(INSTALLED_DESIGN, name);
   return existsSync(installed) ? installed : legacy;
 }
 
@@ -120,9 +120,9 @@ export function projectDir(name: string): string {
 export function listOrgs(): string[] {
   const isProject = (dir: string) =>
     existsSync(join(dir, "styles")) || existsSync(join(dir, "templates")) || existsSync(join(dir, "components"));
-  const flat = existsSync(RX) && !databaseOnly()
-    ? readdirSync(RX, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && !RESERVED_RX.has(e.name) && isProject(join(RX, e.name)))
+  const flat = existsSync(DESIGN) && !databaseOnly()
+    ? readdirSync(DESIGN, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !RESERVED_DESIGN.has(e.name) && isProject(join(DESIGN, e.name)))
         .map((e) => e.name)
     : [];
   const legacy = existsSync(ORGS_ROOT) && !databaseOnly()
@@ -131,9 +131,9 @@ export function listOrgs(): string[] {
   // Projects this universe was PUBLISHED but does not author. On a deployed universe
   // these are the only ones there are. A name in both is listed once, and `projectDir`
   // decides which home wins — on disk, every time.
-  const installed = existsSync(INSTALLED_RX)
-    ? readdirSync(INSTALLED_RX, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && !RESERVED_RX.has(e.name) && isProject(join(INSTALLED_RX, e.name)))
+  const installed = existsSync(INSTALLED_DESIGN)
+    ? readdirSync(INSTALLED_DESIGN, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !RESERVED_DESIGN.has(e.name) && isProject(join(INSTALLED_DESIGN, e.name)))
         .map((e) => e.name)
     : [];
   return [...new Set([...flat, ...legacy, ...installed])].sort();

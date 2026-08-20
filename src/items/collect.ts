@@ -42,24 +42,24 @@ const isDef = (f: string) => f.endsWith(".yaml") || f.endsWith(".json");
  * it is source on disk; in a developer's project it is the installed bundle, because
  * sync-starter.sh deliberately ships neither the source nor a way to publish it.
  */
-function designSystemDir(rxHome: string): string {
-  const onDisk = join(rxHome, "marketplace");
+function designSystemDir(designRoot: string): string {
+  const onDisk = join(designRoot, "marketplace");
   if (existsSync(onDisk)) return onDisk;
-  const nodesHome = join(rxHome, "..", "nodes");
+  const nodesHome = join(designRoot, "..", "nodes");
   for (const c of [
     join(nodesHome, "marketplace", "definitions"),
-    join(rxHome, "..", "plugins", "node_modules", "@unoverse-platform", "marketplace", "definitions"),
+    join(designRoot, "..", "plugins", "node_modules", "@unoverse-platform", "marketplace", "definitions"),
   ])
     if (existsSync(c)) return c;
   return onDisk; // nothing found: the version will hash to an empty set, which is honest
 }
 
 /** Every project a developer could publish, by name. */
-export function listProjects(rxHome: string): string[] {
-  if (!existsSync(rxHome)) return [];
-  return readdirSync(rxHome)
+export function listProjects(designRoot: string): string[] {
+  if (!existsSync(designRoot)) return [];
+  return readdirSync(designRoot)
     .filter((e) => !e.startsWith(".") && !NOT_A_PROJECT.has(e))
-    .filter((e) => statSync(join(rxHome, e)).isDirectory())
+    .filter((e) => statSync(join(designRoot, e)).isDirectory())
     .sort();
 }
 
@@ -87,14 +87,14 @@ function filesUnder(dir: string): Record<string, string> {
  * already stored (`{ files: {...} }`, manifests/source.ts rowsSource), so both kinds read
  * back the same way.
  */
-export function collectProject(rxHome: string, project: string): CollectedItem[] {
-  const root = join(rxHome, project);
-  if (!existsSync(root)) throw new Error(`No project "${project}" in ${rxHome}`);
+export function collectProject(designRoot: string, project: string): CollectedItem[] {
+  const root = join(designRoot, project);
+  if (!existsSync(root)) throw new Error(`No project "${project}" in ${designRoot}`);
 
   // WHAT THIS WAS BUILT ON, stamped on every item. Computed once per collection: it is the
   // same design system for the whole project, and hashing it per item would be wasteful and
   // could disagree with itself mid-run if a file changed.
-  const base_version = designSystemVersion(designSystemDir(rxHome));
+  const base_version = designSystemVersion(designSystemDir(designRoot));
 
   const items: CollectedItem[] = [];
   // A COMPONENT row's name is the qualified ref (`<org>/<name>`): the items table's

@@ -25,7 +25,7 @@ import { makeLintFile } from "./file.mjs";
 import { makeTokensForFile } from "./tokens.mjs";
 
 /**
- * Lint every definition under `rxHome`. Prints nothing, exits nothing.
+ * Lint every definition under `designRoot`. Prints nothing, exits nothing.
  * A missing rx folder is REPORTED rather than thrown, so callers get one shape of answer.
  *
  * `options.overlay` maps an absolute path to text that STANDS IN for what is on disk.
@@ -35,14 +35,14 @@ import { makeTokensForFile } from "./tokens.mjs";
  * existence rules out. Sibling files are still read from disk: only the file being edited
  * is substituted.
  */
-export function lintDefinitions(rxHome, options = {}) {
+export function lintDefinitions(designRoot, options = {}) {
   const overlay = {};
   for (const [k, v] of Object.entries(options.overlay ?? {})) overlay[resolve(k)] = v;
   const readText = (f) => {
     const hit = overlay[resolve(f)];
     return hit === undefined ? readFileSync(f, "utf8") : hit;
   };
-  const candidates = rxHome ? [resolve(rxHome)] : [resolve("apps/unoverse/rx"), resolve("rx")];
+  const candidates = designRoot ? [resolve(designRoot)] : [resolve("apps/unoverse/design"), resolve("design")];
 
   /** The monorepo's shapes: the design system at `rx/marketplace/`, or the legacy one
    *  with `components/` and `atoms/` loose at the root. */
@@ -847,7 +847,7 @@ function componentNamesForFile(file) {
   const lintFile = makeLintFile({ ...ctx, walkNode });
 
   for (const home of homes) for (const f of jsonFiles(home.dir)) lintFile(f);
-  return { problems, homes, rxHome: RX, designSystem: DS };
+  return { problems, homes, designRoot: RX, designSystem: DS };
 }
 
 /** True when anything would fail a build. Warnings and hints inform, errors stop. */

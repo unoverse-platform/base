@@ -12,13 +12,13 @@
 
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { existsSync } from "fs";
+import { existsSync, renameSync } from "fs";
 
 /**
  * Find the content home when nobody said.
  *
  * ANCHORED ON A MARKER, never on a depth. Counting `../` from this file's own location is
- * what broke every path in the platform the last time this file moved: RX_HOME landed one
+ * what broke every path in the platform the last time this file moved: DESIGN_HOME landed one
  * directory above the repo and every loader quietly found nothing.
  */
 function findHome(): string {
@@ -41,7 +41,7 @@ function findHome(): string {
   // a path under cwd, and anything reading them will fail somewhere obvious.
   console.warn(
     "[unoverse:base] UNOVERSE_HOME is not set and no apps/unoverse was found above this package. " +
-      "Falling back to the working directory; set UNOVERSE_HOME to the folder holding nodes/, rx/ and prompts/.",
+      "Falling back to the working directory; set UNOVERSE_HOME to the folder holding nodes/, design/ and prompts/.",
   );
   return process.cwd();
 }
@@ -53,7 +53,7 @@ export interface Paths {
   /** Node manifests and node packages authored for this deployment. */
   nodes: string;
   /** Design data: components, templates, styles. */
-  rx: string;
+  design: string;
   /** Authored agent skills (SKILL.md). */
   skills: string;
   /** Reusable prompt snippets. */
@@ -66,10 +66,38 @@ export interface Paths {
   marketplace: string;
 }
 
+/**
+ * The design folder's on-disk name, renamed `rx` → `design` (2026-08-20).
+ *
+ * MIGRATE-ONCE, not dual-read: a root still holding the legacy `rx/` is renamed to
+ * `design/` the first time anything resolves it, and the platform knows ONE name from
+ * then on. Resolution doubling as migration is deliberate — every reader passes through
+ * here, so no entry point can forget to migrate, and no second code path survives to
+ * drift. If the rename is impossible (read-only mount), the warning says exactly what
+ * to do and resolution still returns `design/`: the failure is loud and immediate,
+ * never a silent read from a folder half the platform no longer knows about.
+ */
+export function designDir(root: string): string {
+  const design = path.join(root, "design");
+  const legacy = path.join(root, "rx");
+  if (!existsSync(design) && existsSync(legacy)) {
+    try {
+      renameSync(legacy, design);
+      console.warn(`[unoverse:base] migrated ${legacy} → ${design} (rx/ is now design/)`);
+    } catch (e) {
+      console.warn(
+        `[unoverse:base] could not rename ${legacy} → ${design} (${(e as Error).message}). ` +
+          `Rename it by hand; the platform reads design/ only.`,
+      );
+    }
+  }
+  return design;
+}
+
 function derive(home: string): Paths {
   return {
     nodes: path.join(home, "nodes"),
-    rx: path.join(home, "rx"),
+    design: designDir(home),
     skills: path.join(home, "prompts/skills"),
     promptBlocks: path.join(home, "prompts/blocks"),
     plugins: path.join(home, "plugins"),
@@ -112,13 +140,13 @@ export function getPaths(): Paths {
 // Named exports, kept because the tree already reads them. They are RESOLVED ONCE at import,
 // so a host calling setPaths() must do it before anything else imports this module.
 export const NODES_HOME = paths.nodes;
-export const RX_HOME = paths.rx;
+export const DESIGN_HOME = paths.design;
 export const SKILLS_HOME = paths.skills;
 export const PROMPT_BLOCKS_HOME = paths.promptBlocks;
 /**
  * Where INSTALLED items are written so the loaders can read them (items/hydrate.ts).
  *
- * A SEPARATE ROOT, never inside `rx`. In the monorepo `RX_HOME` is somebody's authoring
+ * A SEPARATE ROOT, never inside the design tree. In the monorepo `DESIGN_HOME` is somebody's authoring
  * tree, and hydrating a database into it would overwrite work in progress. Keeping it
  * apart is also what makes the precedence rule enforceable: the on-disk tiers are searched
  * first and an installed row can only ever fill a gap, never replace what the platform
@@ -132,7 +160,7 @@ export const INSTALLED_HOME = process.env.UNOVERSE_INSTALLED_HOME?.trim() || pat
 /**
  * `UNOVERSE_DATABASE_ONLY=1` — behave like a deployed universe on a developer's machine.
  *
- * A server holds no rx, no prompts and no node manifests, so everything it serves comes
+ * A server holds no design tree, no prompts and no node manifests, so everything it serves comes
  * from its database. In the monorepo those folders are full, they are searched first, and
  * they win — which is correct for authoring and means the production path is never
  * exercised until it is deployed. This turns the on-disk tiers off so the database is the

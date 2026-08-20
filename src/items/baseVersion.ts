@@ -67,7 +67,7 @@ function packageVersion(designSystemDir: string): string | null {
 
 /**
  * Compute the version of the design system at `designSystemDir` (the resolved marketplace
- * directory: on-disk rx/marketplace, or the installed bundle).
+ * directory: on-disk design/marketplace, or the installed bundle).
  *
  * Hashes components, atoms and styles together, because they only mean anything as a set:
  * a universe holding half of them renders against a contract with holes.

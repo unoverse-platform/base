@@ -12,9 +12,9 @@
  * draw. Installed, present, unreachable — and nothing said so.
  *
  * THE FIXTURE IS A DEPLOYED UNIVERSE, which is the only shape that shows the bug: an empty
- * authored `rx/`, no bundle, and a styles set in the installed tree. Run it against the
- * monorepo's own rx and it passes either way, because `rx/marketplace/styles` is right
- * there — which is exactly why this went unnoticed.
+ * authored `design/`, no bundle, and a styles set in the installed tree. Run it against the
+ * monorepo's own design tree and it passes either way, because `design/marketplace/styles`
+ * is right there — which is exactly why this went unnoticed.
  */
 import test, { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -25,16 +25,16 @@ import { join, resolve } from "node:path";
 const HOME = mkdtempSync(join(tmpdir(), "unoverse-theme-home-"));
 const INSTALLED = join(HOME, ".installed");
 
-// An authored rx/ that exists and holds NOTHING — a deployed universe has no design
+// An authored design/ that exists and holds NOTHING — a deployed universe has no design
 // system on disk. Everything must come from the installed tree.
-mkdirSync(join(HOME, "rx"), { recursive: true });
+mkdirSync(join(HOME, "design"), { recursive: true });
 
-// The design system as an INSTALLED item: rows unpacked under .installed/rx/marketplace.
+// The design system as an INSTALLED item: rows unpacked under .installed/design/marketplace.
 // Copied from the repo's real styles so this asserts against the actual token set rather
 // than a hand-made stub that could drift into passing.
-const REAL_STYLES = resolve(import.meta.dirname, "..", "..", "..", "apps/unoverse/rx/marketplace/styles");
-const INSTALLED_STYLES = join(INSTALLED, "rx", "marketplace", "styles");
-mkdirSync(join(INSTALLED, "rx", "marketplace"), { recursive: true });
+const REAL_STYLES = resolve(import.meta.dirname, "..", "..", "..", "apps/unoverse/design/marketplace/styles");
+const INSTALLED_STYLES = join(INSTALLED, "design", "marketplace", "styles");
+mkdirSync(join(INSTALLED, "design", "marketplace"), { recursive: true });
 if (existsSync(REAL_STYLES)) cpSync(REAL_STYLES, INSTALLED_STYLES, { recursive: true });
 
 /**
@@ -74,7 +74,7 @@ describe("a deployed universe, whose design system is installed rather than ship
       "fixture is wrong: no installed styles to resolve, so this would pass by asserting nothing",
     );
     assert.ok(
-      !existsSync(join(HOME, "rx", "marketplace")),
+      !existsSync(join(HOME, "design", "marketplace")),
       "fixture is wrong: an authored design system on disk hides the tier under test",
     );
   });

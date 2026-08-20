@@ -17,7 +17,7 @@
  * installs from a published package, or every item would read as an update the moment
  * it landed. Whichever survives, it has to be one function used by both.
  *
- * Sources are on DISK today (rx/, prompts/, nodes/). That is deliberate and temporary:
+ * Sources are on DISK today (design/, prompts/, nodes/). That is deliberate and temporary:
  * a universe's own rows are the truth for what it HAS, while what it CAN HAVE still
  * comes from the platform's files until publishing writes catalogue rows.
  */
@@ -29,7 +29,7 @@ import * as path from "path";
 import { fingerprintOf } from "./fingerprint.js";
 import { listDefinitions } from "../definitions/definitions.js";
 import { loadAuthoredPromptBlocks, loadParsedSkill, listAuthoredSkillNames } from "./loaders.js";
-import { SKILLS_HOME, NODES_HOME, RX_HOME, databaseOnly } from "../paths.js";
+import { SKILLS_HOME, NODES_HOME, DESIGN_HOME, databaseOnly } from "../paths.js";
 import { diskSource } from "../manifests/source.js";
 import { composeNode } from "../manifests/compose.js";
 
@@ -97,15 +97,15 @@ const DESIGN_SYSTEM = "design-system";
 function designSystemItems(): CatalogueItem[] {
   const items: CatalogueItem[] = [];
 
-  // Marketplace tier only. An org's own components (rx/bpp, rx/sab) are theirs, never
+  // Marketplace tier only. An org's own components (design/bpp, design/sab) are theirs, never
   // ours to publish, so anything carrying an org is excluded here.
   for (const kind of ["component", "atom"] as const) {
     // The catalogue offers AUTHORED work only — the styles section's rule, applied to
     // every kind. The serving path may fall back to the npm bundle or the installed
     // cache so screens can render, but offering THOSE back as authored branded every
     // installed item "yours, on disk" the moment it was installed or the image carried
-    // the bundle. Authored means the monorepo's rx tier, and nothing else.
-    if (!fs.existsSync(path.join(RX_HOME, "marketplace", kind === "component" ? "components" : "atoms"))) continue;
+    // the bundle. Authored means the monorepo's design tier, and nothing else.
+    if (!fs.existsSync(path.join(DESIGN_HOME, "marketplace", kind === "component" ? "components" : "atoms"))) continue;
     for (const d of listDefinitions(kind) as Array<Record<string, any>>) {
       if (d.org) continue;
       // An atom is addressed by its FILENAME (`ref: outline-button` loads
@@ -127,7 +127,7 @@ function designSystemItems(): CatalogueItem[] {
 
   // Styles are ONE item: base, semantic and themes only mean anything as a set, and a
   // universe holding half of them would render against a contract with holes.
-  const stylesDir = path.join(RX_HOME, "marketplace", "styles");
+  const stylesDir = path.join(DESIGN_HOME, "marketplace", "styles");
   if (fs.existsSync(stylesDir)) {
     // Walked recursively: styles is base/, semantic/ and themes/, not a flat folder,
     // and a top-level-only read silently produced NO styles item at all.

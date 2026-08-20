@@ -18,9 +18,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { lintDefinitions } from "../src/lint/rx/index.mjs";
+import { lintDefinitions } from "../src/lint/design/index.mjs";
 
-const RX = resolve(join(import.meta.dirname, "../../../apps/unoverse/rx"));
+const RX = resolve(join(import.meta.dirname, "../../../apps/unoverse/design"));
 
 /** ANY layout in ANY project, DISCOVERED — this test must not name a customer's work
  *  (server/tests/ops/no-project-fixtures). It needs one real path to stand the overlay on,

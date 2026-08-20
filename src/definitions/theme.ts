@@ -36,9 +36,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // VALUES are each org's own — that's how two clients get different fonts/colors/spacing
 // from the same components, without re-copying the foundation.
 import { listOrgs, projectDir } from "./definitions.js";
-import { NODES_HOME, PLUGINS_DIR, RX_HOME, INSTALLED_HOME, databaseOnly } from "../paths.js";
+import { NODES_HOME, PLUGINS_DIR, DESIGN_HOME, INSTALLED_HOME, databaseOnly, designDir } from "../paths.js";
 
-const RX = RX_HOME;
+const DESIGN = DESIGN_HOME;
 export const DEFAULT_ORG = "default";
 
 /** The styles dir for a project, or null if it has none. `projectDir` resolves the
@@ -52,7 +52,7 @@ function orgStyles(org: string): string | null {
  * The marketplace FOUNDATION — base + semantic + default themes, the shared token
  * contract every org inherits (buildTheme's fallback layer) AND the `default` theme set
  * itself. Its home is now `rx/marketplace/styles` (the honest marketplace folder, no
- * longer an org costume under `orgs/default`). Resolution mirrors `findRxComponentsDir`:
+ * longer an org costume under `orgs/default`). Resolution mirrors `findDesignComponentsDir`:
  * the on-disk marketplace dir wins (dev/local), else the bundled package — the monorepo
  * home node, then the installed marketplace package. This lets the foundation ship WITH
  * the package (no `rx/marketplace` on disk) once purged from the image (Phase 4).
@@ -75,14 +75,14 @@ const DS_STYLES_CANDIDATES = [
  * `{"themes":[]}` and Studio sat on "loading theme from mcp…" for ever, because a screen
  * with no tokens cannot draw. Installed, present, and unreachable.
  */
-const INSTALLED_STYLES = join(INSTALLED_HOME, "rx", "marketplace", "styles");
+const INSTALLED_STYLES = join(designDir(INSTALLED_HOME), "marketplace", "styles");
 
 function foundationStyles(): string | null {
   // Under the switch the authored tiers are skipped, so what a deployed universe would
   // resolve is what a developer resolves. Same shape as `marketplaceDir`.
   if (databaseOnly()) return existsSync(INSTALLED_STYLES) ? INSTALLED_STYLES : null;
-  const rxDs = join(RX, "marketplace", "styles");
-  if (existsSync(rxDs)) return rxDs; // on-disk marketplace wins (dev/local)
+  const designDs = join(DESIGN, "marketplace", "styles");
+  if (existsSync(designDs)) return designDs; // on-disk marketplace wins (dev/local)
   for (const c of DS_STYLES_CANDIDATES) if (existsSync(c)) return c;
   // SEARCHED LAST, so anything on disk still wins — the same precedence the node loader
   // applies with [disk, rows]. On a deployed universe the tiers above are empty by design

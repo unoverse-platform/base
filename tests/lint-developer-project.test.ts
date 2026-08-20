@@ -33,7 +33,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { lintDefinitions } = await import("../src/lint/rx/index.mjs");
+const { lintDefinitions } = await import("../src/lint/design/index.mjs");
 
 const ROOT = mkdtempSync(join(tmpdir(), "unoverse-lint-project-"));
 after(() => rmSync(ROOT, { recursive: true, force: true }));

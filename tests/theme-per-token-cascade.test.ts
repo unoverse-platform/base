@@ -1,7 +1,7 @@
 /**
  * AN ORG OMITS A TOKEN TO INHERIT IT — PER TOKEN, NOT PER LAYER.
  *
- * `rx/marketplace/styles` is the foundation every org inherits. `buildTheme` reads the
+ * `design/marketplace/styles` is the foundation every org inherits. `buildTheme` reads the
  * foundation's `base` + `semantic` into ONE flat registry keyed by dotted path, then the
  * org's on top, so an org token overrides the foundation's and an omitted token is
  * inherited. That is what lets a brand name `color` and `typography` and keep the
@@ -28,9 +28,9 @@ const HOME = mkdtempSync(join(tmpdir(), "unoverse-theme-cascade-"));
 
 // The real foundation, copied rather than stubbed: a hand-made fixture could drift into
 // passing while the actual token set stopped inheriting.
-const REAL_STYLES = resolve(import.meta.dirname, "..", "..", "..", "apps/unoverse/rx/marketplace/styles");
-const FOUNDATION = join(HOME, "rx", "marketplace", "styles");
-mkdirSync(join(HOME, "rx", "marketplace"), { recursive: true });
+const REAL_STYLES = resolve(import.meta.dirname, "..", "..", "..", "apps/unoverse/design/marketplace/styles");
+const FOUNDATION = join(HOME, "design", "marketplace", "styles");
+mkdirSync(join(HOME, "design", "marketplace"), { recursive: true });
 if (existsSync(REAL_STYLES)) cpSync(REAL_STYLES, FOUNDATION, { recursive: true });
 
 /**
@@ -39,7 +39,7 @@ if (existsSync(REAL_STYLES)) cpSync(REAL_STYLES, FOUNDATION, { recursive: true }
  * folder, which is the whole point — per-layer semantics would let that folder shadow the
  * foundation's entire base layer.
  */
-const ORG = join(HOME, "rx", "tinyorg", "styles");
+const ORG = join(HOME, "design", "tinyorg", "styles");
 mkdirSync(join(ORG, "base"), { recursive: true });
 mkdirSync(join(ORG, "themes"), { recursive: true });
 writeFileSync(

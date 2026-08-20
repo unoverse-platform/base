@@ -1,0 +1,58 @@
+{
+  "$id": "https://unoverse/workflow/layout.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Layout document",
+  "description": "The presentation overlay for a workflow (docs/architecture/WORKFLOW_DOCUMENT.md). Optional and disposable: a workflow with no layout document renders via the computed (ELK) arrangement. Node ids are the join key to the workflow document. v1 treats an overlay as covering the whole canvas.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "nodes"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "zoom"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "zoom": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["x", "y"],
+        "properties": {
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "width": { "type": "number" },
+          "height": { "type": "number" }
+        }
+      }
+    },
+    "edges": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "renderer": { "type": "string", "minLength": 1 },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
