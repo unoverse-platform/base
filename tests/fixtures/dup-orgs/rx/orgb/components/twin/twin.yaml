@@ -1,0 +1,6 @@
+unoverse: "1.0"
+kind: component
+name: twin
+root:
+  type: Text
+  value: orgb twin

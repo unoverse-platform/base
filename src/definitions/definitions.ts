@@ -1122,9 +1122,12 @@ export function loadComponentApp(id: string, org?: string): AppManifest | null {
     ...(org ? { org } : {}),
     // Default load mode = focus (interactive widgets); author `defaultState` to override.
     defaultState: m.defaultState ?? m.mode ?? "focus",
-    // The deliverable IS this component — point the handler's outputs/elicitation lookup at it.
-    previewComponents: m.previewComponents?.length ? m.previewComponents : [lower],
-    states: listStates("component", lower),
+    // The deliverable IS this component — point the handler's outputs/elicitation lookup
+    // at it, by the QUALIFIED ref for an org component: two orgs may share the bare name,
+    // and the bare form here took every /mcp initialize down with the resolver's
+    // ambiguity error (observed live, bppunoverse 2026-08-20).
+    previewComponents: m.previewComponents?.length ? m.previewComponents : [org ? `${org}/${lower}` : lower],
+    states: listStates("component", org ? `${org}/${lower}` : lower),
   });
 }
 
@@ -1132,12 +1135,24 @@ export function loadComponentApp(id: string, org?: string): AppManifest | null {
  *  COMPONENT app (a component with a manifest.json). Both are native MCP app tools. */
 export function listApps(org?: string): AppManifest[] {
   const out: AppManifest[] = [];
+  // PER-ENTRY ISOLATION (same law as listDefinitions): this list is built INSIDE MCP
+  // server construction, so one unloadable app taking the walk down means EVERY
+  // initialize on every door answers -32603 (observed live: one ambiguous bare ref
+  // dropped the whole universe, 2026-08-20). One broken app degrades to a skipped
+  // entry with a warning, never a dead platform.
+  const push = (load: () => AppManifest | null, label: string) => {
+    try {
+      const m = load();
+      if (m) out.push(m);
+    } catch (err) {
+      console.warn(`[unoverse] skipping app '${label}' — failed to load: ${(err as Error)?.message ?? err}`);
+    }
+  };
   for (const { org: o, dir } of templateDirs(org ?? null)) {
     if (!existsSync(dir)) continue;
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
-      const m = loadAppManifest(`${o}/${e.name}`);
-      if (m) out.push(m);
+      push(() => loadAppManifest(`${o}/${e.name}`), `${o}/${e.name}`);
     }
   }
   // DESIGN-SYSTEM component apps carry no org — include them whenever we're listing all
@@ -1145,8 +1160,7 @@ export function listApps(org?: string): AppManifest[] {
   if (org == null && existsSync(SHARED_DIR.component)) {
     for (const e of readdirSync(SHARED_DIR.component, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
-      const m = loadComponentApp(e.name);
-      if (m) out.push(m);
+      push(() => loadComponentApp(e.name), e.name);
     }
   }
   // ORG component apps (`rx/orgs/<org>/components/<id>` + manifest.json) — the client's
@@ -1160,8 +1174,7 @@ export function listApps(org?: string): AppManifest[] {
     if (!existsSync(dir)) continue;
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       if (!e.isDirectory()) continue;
-      const m = loadComponentApp(e.name, o);
-      if (m) out.push(m);
+      push(() => loadComponentApp(e.name, o), `${o}/${e.name}`);
     }
   }
   return out;
