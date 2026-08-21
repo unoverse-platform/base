@@ -43,7 +43,17 @@ export interface PublishPlan {
 export async function lintForPublish(designRoot: string, project: string): Promise<{ problems: Finding[]; errors: Finding[] }> {
   const { lintDefinitions } = await import("../lint/design/index.mjs");
   const result = lintDefinitions(designRoot);
-  const mine = result.problems.filter((p: Finding) => !p.file || p.file.includes(`/${project}/`) || !p.file.includes("/design/"));
+  /**
+   * SCOPED TO THE PROJECT BEING DEPLOYED, on paths that may be relative. The old
+   * check looked for "/design/" with a leading slash, which a relative path never
+   * has, so every other project's findings leaked through and a bpp comment blocked
+   * a lyceum deploy (observed live 2026-08-21). Boundary regexes hold for absolute
+   * and relative paths alike; findings outside the design tree (the tree itself,
+   * nodes, prompts) still always count.
+   */
+  const inDesign = (f: string) => /(^|\/)design\//.test(f);
+  const inProject = (f: string) => new RegExp(`(^|/)design/${project}(/|$)`).test(f);
+  const mine = result.problems.filter((p: Finding) => !p.file || !inDesign(p.file) || inProject(p.file));
   return { problems: mine, errors: mine.filter((p: Finding) => p.level === "error") };
 }
 

@@ -54,8 +54,27 @@ function lintFile(file) {
   // never a style the SDK resolves — token law governs the inside, not the envelope.
   if (!isFixture(file) && !isHook(file) && !isManifest(file))
     src.split("\n").forEach((line, i) => {
-      if (RAW_VALUE.test(line) && !/^\s*"?appWidth"?\s*:/.test(line))
-        report("error", file, `raw value. Token names only; add/scale a token in the org styles instead (LAW 1, docs/design/06): ${line.trim()}`, i + 1);
+      /**
+       * THE RULE JUDGES CODE, NEVER COMMENTARY. A comment explaining a contrast
+       * decision legitimately names the hex it rejected ("#E9F1FF dropped it to
+       * 1.14:1"), and scanning the raw line flagged exactly the best-documented
+       * files (observed live 2026-08-21: two comment hexes blocked a deploy).
+       * YAML comments start at an unquoted #, at line start or after whitespace;
+       * everything from there is prose. A quoted "#fff" VALUE stays visible to the
+       * rule, which is the whole point of the law.
+       */
+      let code = line, inS = false, inD = false;
+      for (let j = 0; j < line.length; j++) {
+        const ch = line[j];
+        if (ch === "'" && !inD) inS = !inS;
+        else if (ch === '"' && !inS) inD = !inD;
+        else if (ch === "#" && !inS && !inD && (j === 0 || /\s/.test(line[j - 1]))) {
+          code = line.slice(0, j);
+          break;
+        }
+      }
+      if (RAW_VALUE.test(code) && !/^\s*"?appWidth"?\s*:/.test(code))
+        report("error", file, `raw value. Token names only; add/scale a token in the org styles instead (LAW 1, docs/design/06): ${code.trim()}`, i + 1);
     });
 
   let json;
