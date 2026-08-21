@@ -28,6 +28,8 @@ export interface PublishPlan {
   update: CollectedItem[];
   unchanged: CollectedItem[];
   refused: Array<CollectedItem & { why: string }>;
+  /** Rows the universe holds for this project that the workspace no longer does. */
+  remove: Array<{ kind: string; name: string }>;
 }
 
 /**
@@ -57,9 +59,41 @@ export async function planPublish(
   items: CollectedItem[],
   universe: string,
   token: string,
+  /** The project being deployed; names the org whose universe rows the sync reconciles. */
+  project = "",
   fetchImpl: typeof fetch = fetch,
 ): Promise<PublishPlan> {
-  const plan: PublishPlan = { create: [], update: [], unchanged: [], refused: [] };
+  const plan: PublishPlan = { create: [], update: [], unchanged: [], refused: [], remove: [] };
+
+  /**
+   * DEPLOY IS A SYNC (ruled 2026-08-21): what the workspace no longer holds, the
+   * universe should not keep serving under this project's name. The universe lists its
+   * rows for the project; anything absent from the collected items joins the plan as a
+   * removal, shown and confirmed like everything else.
+   *
+   * ONE GUARD, against the catastrophic misread: a workspace that holds NO items for
+   * the project (a fresh clone missing its files, the wrong folder entirely) does not
+   * get to empty the universe. Removals are proposed only when the workspace holds at
+   * least one item — deleting the last one is done by name, deliberately.
+   */
+  if (project && items.length > 0) {
+    try {
+      const res = await fetchImpl(`${universe}/publish`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ op: "list", project }),
+      });
+      if (res.ok) {
+        const doc = (await res.json().catch(() => null)) as { items?: Array<{ kind: string; name: string }> } | null;
+        const have = new Set(items.map((i) => `${i.kind}/${i.name}`));
+        for (const r of doc?.items ?? []) {
+          if (!have.has(`${r.kind}/${r.name}`)) plan.remove.push(r);
+        }
+      }
+      // An older universe answers this op with an error: no removals proposed, the
+      // additive behavior every deploy had before. Never a failure.
+    } catch { /* unreachable universe fails later, on the real sends */ }
+  }
 
   for (const item of items) {
     // ASK THE GATE, not the item store. `/api/items` is deliberately shut (§9.10), so a
@@ -113,6 +147,18 @@ export async function sendPublish(
     if (res.ok) sent.push({ ...item, mode: body.mode });
     // The server's refusal message is written to be read; do not paraphrase it.
     else failed.push({ ...item, why: body.error ?? `HTTP ${res.status}` });
+  }
+  // Removals LAST, after the writes landed: a sync that dies mid-run has then added
+  // before it has taken away, which is the recoverable order.
+  for (const r of plan.remove ?? []) {
+    const res = await fetchImpl(`${universe}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ op: "remove", kind: r.kind, name: r.name }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    if (res.ok) sent.push({ ...(r as CollectedItem), mode: "removed" });
+    else failed.push({ ...(r as CollectedItem), why: body.error ?? `HTTP ${res.status}` });
   }
   return { sent, failed };
 }
