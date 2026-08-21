@@ -473,68 +473,30 @@ export function lintNode(dir, pkg) {
       report("error", F.iface ?? F.node, `needs credential "${name}" but no credentials/${name}.yaml exists in this package. A package DECLARES the credentials it needs (04-credentials.md)`);
   }
 
-  /**
-   * NO config.yaml AT ALL is how the run-authorization fields were skipped entirely.
-   *
-   * The rule below lives inside `if (config?.configSchema)`, so a node with no config file
-   * met none of it: SpatialSearch shipped with no `authRequired`, no `authRole`, and lint
-   * clean. The compulsory field was compulsory only for nodes that already had a form.
-   *
-   * An ANNOTATION node is the one real exception: `Note` is canvas furniture with no inputs,
-   * no outputs and no api, so it is never RUN and there is nobody to authorize.
-   */
-  if (!config?.configSchema && !isAnnotation)
-    report(
-      "error",
-      F.node,
-      `has no config.yaml. Every node needs one for the two run-authorization fields, "authRequired" and "authRole" — the workflow builder's control over who may run this box (15-who-can-run-it.md)`,
-    );
-
   // configSchema internal consistency.
   if (config?.configSchema) {
     const props = config.configSchema.properties ?? {};
     const names = Object.keys(props);
 
     /**
-     * THE TWO RUN-AUTHORIZATION FIELDS, on every node without exception.
+     * THE RUN-AUTHORIZATION FIELDS ARE RESERVED (UNOVERSE_NODE_ACCESS_CHROME.md,
+     * decided 2026-08-21). They are platform CHROME: compose.ts injects the canonical
+     * pair into every runnable node's composed schema, so every settings panel carries
+     * them and no author writes them.
      *
-     * These are the WORKFLOW BUILDER's control, per box on the canvas, and they are separate
-     * from node.yaml's `auth`, which is the node AUTHOR's floor. Both exist because they
-     * answer different questions: the author knows a node is inherently privileged, and only
-     * the builder knows that this particular box faces customers rather than staff.
-     *
-     * A role has to be here rather than only in the manifest. `finance:approve` is a claim
-     * one deployment's identity provider mints, and a node published to the marketplace
-     * cannot know the role vocabulary of every universe that installs it.
-     *
-     * COMPULSORY for the same reason the manifest block is: an optional field that most
-     * nodes omit means a reviewer cannot tell "considered and left open" from "never thought
-     * about", and a node written next year would quietly miss the control entirely.
+     * This rule used to be the inverse — every config had to declare both, and lint
+     * held all 76 copies byte-identical, which is the signature of a thing the platform
+     * should own. A manifest declaring them now is the old pattern: at compose time the
+     * canonical definition supersedes it anyway, so the copy can only mislead whoever
+     * reads the file.
      */
-    const RUN_AUTH = {
-      authRequired: { type: "boolean", widget: "toggle" },
-      authRole: { type: "string", dependsOn: "authRequired" },
-    };
-    for (const [field, want] of Object.entries(RUN_AUTH)) {
-      const f = props[field];
-      if (!f) {
+    for (const field of ["authRequired", "authRole"]) {
+      if (props[field])
         report(
           "error",
           F.config,
-          `config.yaml has no "${field}" property. Every node carries the two run-authorization fields, so whoever builds a workflow can say who may run THIS box (15-who-can-run-it.md)`,
+          `config.yaml declares "${field}", which is platform chrome: compose injects the run-authorization controls into every node's settings form, and a manifest must not carry its own copy (15-who-can-run-it.md). Delete the field and its ui:order entry`,
         );
-        continue;
-      }
-      if (f.type !== want.type)
-        report("error", F.config, `${field} must be type "${want.type}", not "${f.type}". The executor reads it directly and a string "false" is truthy`);
-      if (want.widget && f["ui:widget"] !== want.widget)
-        report("error", F.config, `${field} must render as a "${want.widget}", not "${f["ui:widget"] ?? "a text box"}". It is a yes/no decision about access`);
-      // The role box is meaningless while sign-in is off, and showing it invites someone to
-      // fill it in and believe the step is protected.
-      if (want.dependsOn && f["ui:dependencies"]?.[want.dependsOn] !== true)
-        report("error", F.config, `${field} must declare "ui:dependencies": { ${want.dependsOn}: true }, so it is hidden while ${want.dependsOn} is off`);
-      if (f.default !== (want.type === "boolean" ? false : ""))
-        report("error", F.config, `${field} must default to ${want.type === "boolean" ? "false" : '""'}. A node that gates by default breaks every workflow that already uses it`);
     }
     for (const r of config.configSchema.required ?? [])
       if (!names.includes(r)) report("error", F.config, `required names "${r}", which is not a property`);

@@ -20,6 +20,32 @@ import type { RawNode, RawPackage } from "./source.js";
 
 /** The sections that may live in their own file OR inline in node.yaml. */
 const SECTIONS = ["interface", "config", "api", "test"] as const;
+
+/**
+ * The builder's run-authorization controls, ONE canonical copy (who-can-run-it.md).
+ * Injected into every runnable node's composed config schema; see the chrome comment
+ * in composeNode. The wording is the doc's: change it here and the doc together.
+ */
+const RUN_AUTH_CHROME = {
+  authRequired: {
+    type: "boolean",
+    title: "Require sign-in",
+    description:
+      "Only a signed-in caller may run this step. Leave off and it runs for whoever " +
+      "the workflow's trigger admitted, which is the usual answer.",
+    default: false,
+    "ui:widget": "toggle",
+  },
+  authRole: {
+    type: "string",
+    title: "Require role",
+    description:
+      "A claim the caller's account must carry, as noun:verb (finance:approve, " +
+      "payments:refund). Leave blank to require only that they are signed in.",
+    default: "",
+    "ui:dependencies": { authRequired: true },
+  },
+} as const;
 type Section = (typeof SECTIONS)[number];
 
 /**
@@ -402,6 +428,41 @@ export function composeNode(raw: RawNode, pkg: RawPackage): ComposedNode {
    * transport, or a tool exchange's turns.
    */
   const spawns = (iface.inputs ?? []).some((i: any) => i?.signal === "SPAWN");
+  /**
+   * RUN-AUTHORIZATION CHROME (UNOVERSE_NODE_ACCESS_CHROME.md, decided 2026-08-21).
+   *
+   * The builder's two access controls are injected HERE, once, into the schema every
+   * host is served, instead of being authored into every node's config.yaml. They used
+   * to be compulsory boilerplate in all 76 configs, held byte-identical by a lint rule,
+   * which is the signature of a thing the platform should own: a rule whose job is to
+   * keep N copies identical means there should be one copy.
+   *
+   * Injected at COMPOSE rather than by each front end, so no renderer can forget them
+   * the way SpatialSearch once shipped without them. The executor is untouched:
+   * authorize.ts already reads the raw instance values and takes the stricter of these
+   * and node.yaml's `auth` floor.
+   *
+   * An ANNOTATION (no inputs, no outputs, no api) is never run, so there is nobody to
+   * authorize and it gets no section — the same exception lint always made.
+   *
+   * A manifest still declaring the fields is superseded, not merged: the canonical
+   * definition wins, so a stale copy cannot loosen a default or reword the contract.
+   * (Lint refuses the names outright; this handles installed packages published before
+   * the flip.)
+   */
+  const annotation = !(iface.outputs ?? []).length && !(iface.inputs ?? []).length && !api;
+  const authoredSchema = config.configSchema ?? {};
+  const authoredProps = { ...(authoredSchema.properties ?? {}) };
+  delete authoredProps.authRequired;
+  delete authoredProps.authRole;
+  const composedSchema = annotation
+    ? authoredSchema
+    : { type: "object", ...authoredSchema, properties: { ...authoredProps, ...RUN_AUTH_CHROME } };
+  const authoredOrder: string[] | null = config["ui:order"] ?? null;
+  const composedOrder =
+    annotation || !authoredOrder
+      ? authoredOrder
+      : [...authoredOrder.filter((f) => f !== "authRequired" && f !== "authRole"), "authRequired", "authRole"];
   const derived = streams || spawns || api?.toolExchange ? "CallbackNode" : "PromiseNode";
   if (node.kind !== derived)
     throw new ManifestError(
@@ -452,11 +513,11 @@ export function composeNode(raw: RawNode, pkg: RawPackage): ComposedNode {
       credentials: iface.credentials ?? [],
       serviceConnectors: iface.serviceConnectors ?? null,
       isService: (iface.serviceConnectors ?? []).some((s: any) => s?.isService === true),
-      configSchema: config.configSchema ?? {},
-      // The authored field order for the settings form. Declared in nearly every config
-      // for as long as the format has existed, but dropped here until Aug 2026, so the
-      // canvas silently fell back to schema declaration order.
-      "ui:order": config["ui:order"] ?? null,
+      configSchema: composedSchema,
+      // The authored field order for the settings form, with the access chrome appended
+      // last (settings about access, not about the job). Null when nothing was authored:
+      // the canvas falls back to schema declaration order, which also puts chrome last.
+      "ui:order": composedOrder,
       testData: parts.test?.testData ?? null,
     },
   };
