@@ -48,21 +48,23 @@ const NODE_NOISE = new Set([
   "selected",
   "dragging",
   "positionAbsolute",
-  "width",
-  "height",
   "measured",
   "resizing",
   "deletable",
-  "draggable",
   "selectable",
   "connectable",
   "focusable",
   "sourcePosition",
   "targetPosition",
   "zIndex",
-  "style",
   "className",
 ]);
+/**
+ * Authored presentation the save path deliberately persists (nodeCleanup.ts): a resized
+ * Note's dimensions, a Note's zIndex style, a pinned node's draggable. Not noise — losing
+ * them visibly changes the canvas — so they travel in the layout document's placement.
+ */
+const NODE_PRESENTATION = new Set(["width", "height", "style", "draggable"]);
 const NODE_CONVERTED = new Set(["id", "type", "position", "data"]);
 const NODE_DATA_CONVERTED = new Set(["label", "config", "credentials", "testInputs", "unoManaged", "measuredSize"]);
 
@@ -72,8 +74,13 @@ const NODE_DATA_CONVERTED = new Set(["label", "config", "credentials", "testInpu
  * outputs / executedOutput (stale run results, regenerated every run; UI-component
  * previews re-render on the next run), serviceConnectors (rebuilt from the node
  * definition). Dropped and reported, excluded from the round-trip equivalence.
+ *
+ * executedOutput is the exception the save path already carves out: on a design-system
+ * node it is the canvas preview, and nodeCleanup keeps it for exactly that reason. It
+ * travels as the placement's `preview` rather than being dropped.
  */
-const NODE_DATA_NOISE = new Set(["status", "outputs", "executedOutput", "serviceConnectors"]);
+const NODE_DATA_NOISE = new Set(["status", "outputs", "serviceConnectors"]);
+const NODE_DATA_PRESENTATION = new Set(["executedOutput"]);
 
 /** Presentation and runtime state on an EDGE. */
 const EDGE_NOISE = new Set(["style", "animated", "selected", "zIndex", "markerEnd", "markerStart", "label", "labelStyle", "className", "deletable", "focusable"]);
@@ -104,13 +111,13 @@ export function splitWorkflow(content: LegacyContent): SplitResult {
   for (const [i, node] of (content.nodes ?? []).entries()) {
     const at = `nodes/${i}`;
     for (const key of Object.keys(node)) {
-      if (NODE_CONVERTED.has(key)) continue;
+      if (NODE_CONVERTED.has(key) || NODE_PRESENTATION.has(key)) continue;
       if (NODE_NOISE.has(key)) dropped.push(`${at}/${key}`);
       else problems.push({ path: `${at}/${key}`, message: `unknown node field "${key}" — refusing rather than dropping` });
     }
     const data = node.data ?? {};
     for (const key of Object.keys(data)) {
-      if (NODE_DATA_CONVERTED.has(key)) continue;
+      if (NODE_DATA_CONVERTED.has(key) || NODE_DATA_PRESENTATION.has(key)) continue;
       if (NODE_DATA_NOISE.has(key)) dropped.push(`${at}/data/${key}`);
       else problems.push({ path: `${at}/data/${key}`, message: `unknown node data field "${key}" — refusing rather than dropping` });
     }
@@ -127,7 +134,29 @@ export function splitWorkflow(content: LegacyContent): SplitResult {
       const placement: any = { x: node.position.x, y: node.position.y };
       if (typeof data.measuredSize?.width === "number") placement.width = data.measuredSize.width;
       if (typeof data.measuredSize?.height === "number") placement.height = data.measuredSize.height;
+
+      const size: { width?: number; height?: number } = {};
+      if (typeof node.width === "number") size.width = node.width;
+      if (typeof node.height === "number") size.height = node.height;
+      if (size.width !== undefined || size.height !== undefined) placement.size = size;
+
+      if (node.style !== undefined) placement.style = node.style;
+      if (node.draggable !== undefined) placement.draggable = node.draggable;
+      if (data.executedOutput !== undefined) placement.preview = data.executedOutput;
+
       layoutNodes[node.id] = placement;
+    } else {
+      // No position means no placement, and a placement is the only home the presentation
+      // fields have. Refuse rather than silently drop authored sizing or preview content.
+      for (const key of [...NODE_PRESENTATION, "data/executedOutput"]) {
+        const present = key === "data/executedOutput" ? data.executedOutput !== undefined : node[key] !== undefined;
+        if (present) {
+          problems.push({
+            path: `${at}/${key}`,
+            message: `node carries presentation ("${key}") but no position, so it has no layout placement to travel in`,
+          });
+        }
+      }
     }
   }
 
@@ -220,12 +249,18 @@ export function mergeWorkflow(workflow: WorkflowDocument, layout?: LayoutDocumen
       if (placement.height !== undefined) measuredSize.height = placement.height;
       data.measuredSize = measuredSize;
     }
-    return {
+    if (placement?.preview !== undefined) data.executedOutput = placement.preview;
+    const out: Record<string, unknown> = {
       id: node.id,
       type: node.type,
       position: placement ? { x: placement.x, y: placement.y } : { x: 0, y: 0 },
-      data,
     };
+    if (placement?.size?.width !== undefined) out.width = placement.size.width;
+    if (placement?.size?.height !== undefined) out.height = placement.size.height;
+    if (placement?.style !== undefined) out.style = placement.style;
+    if (placement?.draggable !== undefined) out.draggable = placement.draggable;
+    out.data = data;
+    return out;
   });
 
   const edges = workflow.edges.map((edge) => {
@@ -274,9 +309,17 @@ export function normalizeLegacy(content: LegacyContent): LegacyContent {
       if (d.measuredSize.height !== undefined) measuredSize.height = d.measuredSize.height;
       data.measuredSize = measuredSize;
     }
+    // Authored presentation now round-trips through the layout placement, so the
+    // equivalence has to hold it to account: dropping it here would let a lost Note
+    // size or preview pass as lossless.
+    if (d.executedOutput !== undefined) data.executedOutput = d.executedOutput;
     const out: any = { id: node.id, type: node.type, data };
     if (node.position && typeof node.position.x === "number") out.position = { x: node.position.x, y: node.position.y };
     else out.position = { x: 0, y: 0 };
+    if (typeof node.width === "number") out.width = node.width;
+    if (typeof node.height === "number") out.height = node.height;
+    if (node.style !== undefined) out.style = node.style;
+    if (node.draggable !== undefined) out.draggable = node.draggable;
     return out;
   });
   const edges = (content.edges ?? []).map((edge) => {

@@ -32,7 +32,7 @@ function legacy(): LegacyContent {
         position: { x: 0, y: 0 },
         data: { label: "Deal arrives" },
         selected: false, // RF noise
-        width: 180, // RF noise
+        width: 180, // authored sizing — presentation, travels in the placement
       },
       {
         id: "agent1",
@@ -78,8 +78,14 @@ test("split: positions and viewport land in the layout, logic in the workflow, n
   assert.equal(workflow.edges[1].kind, "service");
 
   assert.deepEqual(
+    layout.nodes.trigger1,
+    { x: 0, y: 0, size: { width: 180 } },
+    "authored sizing is presentation, not noise: it rides in the placement",
+  );
+
+  assert.deepEqual(
     dropped.sort(),
-    ["edges/0/animated", "edges/0/style", "nodes/0/selected", "nodes/0/width", "nodes/1/dragging"],
+    ["edges/0/animated", "edges/0/style", "nodes/0/selected", "nodes/1/dragging"],
     "every dropped field is named — nothing vanishes silently",
   );
 });
@@ -140,18 +146,52 @@ test("THE GATE: edge presentation without an edge id REFUSES (no join key to the
   assert.match(result.problems[0].message, /needs an id/);
 });
 
-test("run residue in node data (status, outputs, executedOutput, serviceConnectors) drops loudly", () => {
+test("run residue in node data (status, outputs, serviceConnectors) drops loudly", () => {
   const content = legacy();
   (content.nodes[1] as any).data.status = "success";
   (content.nodes[1] as any).data.outputs = { output: { big: "blob" } };
-  (content.nodes[1] as any).data.executedOutput = { stale: true };
   (content.nodes[1] as any).data.serviceConnectors = [{ derived: true }];
   const result = verifyLosslessSplit(content);
   assert.equal(result.ok, true, JSON.stringify(result.problems));
   assert.deepEqual(
     result.dropped.filter((p) => p.includes("nodes/1/data")).sort(),
-    ["nodes/1/data/executedOutput", "nodes/1/data/outputs", "nodes/1/data/serviceConnectors", "nodes/1/data/status"],
+    ["nodes/1/data/outputs", "nodes/1/data/serviceConnectors", "nodes/1/data/status"],
   );
+});
+
+test("executedOutput is preview content, not residue: it rides the layout placement", () => {
+  // The save path keeps it on design-system nodes so a component renders its last real
+  // output instead of the template's demo content. Dropping it would visibly change the
+  // canvas, so it is presentation and must survive the round trip.
+  const content = legacy();
+  (content.nodes[1] as any).data.executedOutput = { componentSpec: { props: { title: "real" } } };
+
+  const { layout, dropped } = splitWorkflow(content);
+  assert.deepEqual(layout.nodes.agent1.preview, { componentSpec: { props: { title: "real" } } });
+  assert.equal(dropped.includes("nodes/1/data/executedOutput"), false, "preview content is not dropped");
+  assert.equal(verifyLosslessSplit(content).ok, true, "and it round-trips");
+});
+
+test("style and draggable ride the layout placement", () => {
+  const content = legacy();
+  (content.nodes[1] as any).style = { zIndex: -1 };
+  (content.nodes[1] as any).draggable = false;
+
+  const { layout } = splitWorkflow(content);
+  assert.deepEqual(layout.nodes.agent1.style, { zIndex: -1 });
+  assert.equal(layout.nodes.agent1.draggable, false);
+  assert.equal(verifyLosslessSplit(content).ok, true);
+});
+
+test("presentation on a node with no position REFUSES rather than dropping it silently", () => {
+  // A placement is the only home these have. No position means no placement.
+  const content = legacy();
+  delete (content.nodes[1] as any).position;
+  (content.nodes[1] as any).width = 640;
+
+  const result = verifyLosslessSplit(content);
+  assert.equal(result.ok, false);
+  assert.match(result.problems.map((p) => p.message).join(" "), /no layout placement/);
 });
 
 test("authored per-node testInputs and the unoManaged marker ride the WORKFLOW document", () => {

@@ -28,7 +28,18 @@
           "x": { "type": "number" },
           "y": { "type": "number" },
           "width": { "type": "number" },
-          "height": { "type": "number" }
+          "height": { "type": "number" },
+          "size": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "width": { "type": "number" },
+              "height": { "type": "number" }
+            }
+          },
+          "style": { "type": "object" },
+          "draggable": { "type": "boolean" },
+          "preview": {}
         }
       }
     },
