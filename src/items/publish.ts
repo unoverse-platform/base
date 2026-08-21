@@ -30,6 +30,9 @@ export interface PublishPlan {
   refused: Array<CollectedItem & { why: string }>;
   /** Rows the universe holds for this project that the workspace no longer does. */
   remove: Array<{ kind: string; name: string }>;
+  /** True when the universe could not answer the sync check (server predates it):
+   *  removals were NOT reconciled and "up to date" must not be claimed. */
+  syncUnavailable?: boolean;
 }
 
 /**
@@ -99,10 +102,17 @@ export async function planPublish(
         for (const r of doc?.items ?? []) {
           if (!have.has(`${r.kind}/${r.name}`)) plan.remove.push(r);
         }
+      } else {
+        // An older universe answers this op with an error: no removals proposed, the
+        // additive behavior every deploy had before — but SAID, never silent. A deploy
+        // that could not check deletions and prints "up to date" is lying by omission
+        // (observed live 2026-08-21: an hour of retests against a server that could
+        // not answer, each one claiming there was nothing to do).
+        plan.syncUnavailable = true;
       }
-      // An older universe answers this op with an error: no removals proposed, the
-      // additive behavior every deploy had before. Never a failure.
-    } catch { /* unreachable universe fails later, on the real sends */ }
+    } catch {
+      plan.syncUnavailable = true; /* unreachable universe also fails later, on the real sends */
+    }
   }
 
   for (const item of items) {
