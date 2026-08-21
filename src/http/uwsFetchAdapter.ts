@@ -174,8 +174,15 @@ export async function handleFetch(
         res.writeHeader("Vary", "Accept-Encoding");
       }
       writeCors(res);
+      // `res.end()` for the empty case, NEVER `endWithoutBody()`. On HTTP/1.1 with no
+      // Content-Length, endWithoutBody() leaves the response unterminated: the client
+      // waits on a reply that never finishes until the socket's idle timeout kills the
+      // connection ~12s later. Every bodyless response paid it — the MCP handshake's
+      // 202 ack among them, so every app open stalled ~10s before its first paint
+      // (observed live on bppunoverse 2026-08-21; reproduced in isolation: a JSON
+      // response 28ms, a null-body 202 11.9s). end() closes with content-length: 0.
       if (body && body.length) res.end(body);
-      else res.endWithoutBody();
+      else res.end();
     });
     return;
   }
