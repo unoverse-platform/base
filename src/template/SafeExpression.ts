@@ -54,6 +54,16 @@ const SAFE_GLOBALS: Record<string, unknown> = {
   // hydration join on exactly those. Without this the ids have to be minted in TypeScript,
   // which means the node cannot be a manifest at all, for the sake of one pure function.
   sha256: (value: unknown) => createHash("sha256").update(String(value ?? "")).digest("hex"),
+  // Text to bytes. A pure function of its argument with no I/O and nothing to reach, the
+  // same bar as sha256 above.
+  //
+  // Needed because BYTES TRAVEL AS BASE64 between calls (`encoding: binary` decodes them at
+  // send time), and the sandbox can express no encoder of its own: `charCodeAt` is not a
+  // safe method and there is no Buffer. So a node holding plain TEXT it wants to store —
+  // parsed markdown written back to S3 is the case that forced this — could not reach any
+  // binary body path at all, for want of one pure transform. UTF-8, because the text is
+  // real prose, not ASCII.
+  toBase64: (value: unknown) => Buffer.from(String(value ?? ""), "utf8").toString("base64"),
   Object: { keys: Object.keys, values: Object.values, entries: Object.entries, fromEntries: Object.fromEntries, assign: (...a: object[]) => Object.assign({}, ...a) },
   Array: { isArray: Array.isArray, from: Array.from, of: Array.of },
   /**

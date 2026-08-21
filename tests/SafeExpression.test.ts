@@ -38,6 +38,9 @@ test("legit data-shaping expressions evaluate correctly", () => {
   // safe globals
   assert.equal(evaluateSafeExpression("return JSON.stringify(signal.items[0])", ctx), '{"name":"Ada"}');
   assert.deepEqual(evaluateSafeExpression("return Object.keys(signal.items[0])", ctx), ["name"]);
+  // toBase64 is UTF-8: "é" is two bytes, so the plain btoa of the code point would differ
+  assert.equal(evaluateSafeExpression("return toBase64('Hello, S3 world!')", ctx), "SGVsbG8sIFMzIHdvcmxkIQ==");
+  assert.equal(evaluateSafeExpression("return toBase64('café')", ctx), Buffer.from("café", "utf8").toString("base64"));
 });
 
 test("SECURITY: process / env access is blocked", () => {

@@ -32,6 +32,23 @@ function universeFetch(listStatus = 200) {
   }) as typeof fetch;
 }
 
+test("a stale bare-named template (the pre-org era, the rename-strand case) is caught", async () => {
+  // The exact live incident: lyceum-chat-layout, bare name, no org column, published
+  // before the current flow. The server's list matches the org-qualified-by-convention
+  // prefix, so the sync proposes it; the current apps in the workspace are untouched.
+  const fetchImpl = (async (_url: any, init?: any) => {
+    const body = JSON.parse(init?.body ?? "{}");
+    if (body.op === "list")
+      return new Response(
+        JSON.stringify({ items: [{ kind: "template", name: "org-chat" }, { kind: "template", name: "org-chat-layout" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    return new Response(JSON.stringify({ ok: true, mode: "create" }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const plan = await planPublish([{ kind: "template", name: "org-chat", definition: {} } as any], "https://u.example", "tok", "org", fetchImpl);
+  assert.deepEqual(plan.remove, [{ kind: "template", name: "org-chat-layout" }]);
+});
+
 test("what left the workspace joins the plan as a removal", async () => {
   const plan = await planPublish([item("org/kept")], "https://u.example", "tok", "org", universeFetch());
   assert.deepEqual(plan.remove, [{ kind: "component", name: "org/gone" }]);
