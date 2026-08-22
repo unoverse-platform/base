@@ -185,6 +185,43 @@ export interface DocumentSchemaOptions {
   grounding?: string;
 }
 
+/**
+ * THE MENU AS WORDS: the same derived vocabulary the schema compiles, rendered as a short
+ * markdown section for a prompt. The Unoverse Markdown block carries the judgement half
+ * ("prose by default, quote figures exactly") and defers the type list to "the schema" —
+ * which only structured-call paths receive. An agent given the block through
+ * `{{prompt.unoverseMarkdown}}` has no schema, so the serving path appends this instead.
+ * Derived from the atoms like everything else here: a new atom appears on the next call
+ * with no prompt to edit.
+ */
+export function documentVocabulary(): string | null {
+  const types = markdownComponentTypes();
+  if (types.length === 0) return null;
+  const shapeOf = (spec: Record<string, unknown>): string => {
+    const items = spec?.items as Record<string, unknown> | undefined;
+    const inner = items?.properties as Record<string, unknown> | undefined;
+    if (spec?.type === "array") return inner ? `[{${Object.keys(inner).join(", ")}}]` : "[string]";
+    return String(spec?.type ?? "string");
+  };
+  const lines = types.map((t) => {
+    const props = (t.schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    const fields = Object.entries(props)
+      .map(([name, spec]) => `${name}: ${shapeOf(spec)}`)
+      .join(", ");
+    const guide = [t.description, t.whenToUse].filter(Boolean).join(" ");
+    return `- \`${t.type}\` — { ${fields} }${guide ? ` — ${guide}` : ""}`;
+  });
+  return [
+    "## The blocks on offer",
+    "",
+    "Return ONLY a JSON array of blocks — no words outside the JSON and no code fences.",
+    "Each block is `{ \"kind\": \"<type>\", \"heading\": \"\", \"group\": \"\", ...that kind's fields }`",
+    "(heading and group may be empty strings):",
+    "",
+    ...lines,
+  ].join("\n");
+}
+
 /** The components array on its own, so a caller can store it under whatever name it uses
  *  (the content pipeline's rows carry it as `sections`). */
 export function compileDocumentComponents(): Record<string, unknown> | null {
